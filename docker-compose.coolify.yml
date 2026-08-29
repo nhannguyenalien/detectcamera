@@ -1,0 +1,47 @@
+name: vision-stack
+
+# Bản dùng cho Coolify (Docker Compose Empty).
+# Image đã build sẵn trên server: vision-api:latest, mock-backend:latest
+# (chạy scripts/build.sh trên VM trước khi deploy bằng file này).
+
+services:
+  mock-backend:
+    image: mock-backend:latest
+    restart: unless-stopped
+    environment:
+      DB_PATH: /data/backend/backend.db
+      INTERNAL_KEY: ${INTERNAL_KEY}
+      EMB_DIM: "512"
+      SEED_TENANTS: ${SEED_TENANTS:-t_demo}
+    volumes:
+      - backend-data:/data/backend
+
+  vision-api:
+    image: vision-api:latest
+    restart: unless-stopped
+    depends_on:
+      - mock-backend
+    environment:
+      INSIGHTFACE_MODEL: ${INSIGHTFACE_MODEL:-buffalo_l}
+      MODEL_ROOT: /data/models/insightface
+      MATCH_THRESHOLD: ${MATCH_THRESHOLD:-0.40}
+      VISION_BACKEND_URL: http://mock-backend:9000
+      VISION_BACKEND_INTERNAL_KEY: ${INTERNAL_KEY}
+      VISION_API_TOKENS: ${VISION_API_TOKENS}
+      VISION_RATE_LIMIT_PER_MIN: ${VISION_RATE_LIMIT_PER_MIN:-120}
+      VISION_PREFETCH_ON_START: "true"
+    volumes:
+      - models:/data/models
+    ports:
+      - "18090:9000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  models:
+  backend-data:
