@@ -1,0 +1,54 @@
+# Coolify dùng file này khi deploy build-from-git (Application → build_pack=dockercompose,
+# docker_compose_location=/coolify.compose.yaml). Coolify tự build 2 image từ Dockerfile,
+# tự retain + rollback. KHÔNG có `name:` / `container_name` (Coolify tự quản).
+# Env (INTERNAL_KEY, VISION_API_TOKENS, ...) set ở tab Environment Variables của resource.
+
+services:
+  mock-backend:
+    build:
+      context: ./mock-backend
+    restart: unless-stopped
+    environment:
+      DB_PATH: /data/backend/backend.db
+      INTERNAL_KEY: ${INTERNAL_KEY}
+      EMB_DIM: "512"
+      SEED_TENANTS: ${SEED_TENANTS:-t_demo}
+    volumes:
+      - backend-data:/data/backend
+
+  vision-api:
+    build:
+      context: ./vision-api
+    restart: unless-stopped
+    depends_on:
+      - mock-backend
+    environment:
+      INSIGHTFACE_MODEL: ${INSIGHTFACE_MODEL:-buffalo_l}
+      MODEL_ROOT: /data/models/insightface
+      DET_SIZE: ${DET_SIZE:-640}
+      MATCH_THRESHOLD: ${MATCH_THRESHOLD:-0.40}
+      TOP_K: ${TOP_K:-5}
+      VISION_BACKEND_URL: http://mock-backend:9000
+      VISION_BACKEND_INTERNAL_KEY: ${INTERNAL_KEY}
+      VISION_API_TOKENS: ${VISION_API_TOKENS}
+      VISION_RATE_LIMIT_PER_MIN: ${VISION_RATE_LIMIT_PER_MIN:-120}
+      VISION_PREFETCH_ON_START: "true"
+      VISION_POST_EVENTS: "true"
+      VISION_ALLOW_URL_FETCH: ${VISION_ALLOW_URL_FETCH:-true}
+      VISION_URL_ALLOWLIST: ${VISION_URL_ALLOWLIST:-}
+      VISION_METRICS_ENABLED: ${VISION_METRICS_ENABLED:-true}
+    volumes:
+      - models:/data/models
+    ports:
+      - "18090:9000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  models:
+  backend-data:
