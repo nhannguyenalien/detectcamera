@@ -39,8 +39,8 @@ services:
       VISION_METRICS_ENABLED: ${VISION_METRICS_ENABLED:-true}
     volumes:
       - models:/data/models
-    ports:
-      - "18090:9000"
+    expose:
+      - "9000"          # Traefik (coolify-proxy) route domain -> :9000. Truy cập ngoài qua Cloudflare Tunnel.
     deploy:
       resources:
         reservations:
