@@ -4,10 +4,17 @@ import time
 import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from typing import Optional
 
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from . import config
+
+bearer_scheme = HTTPBearer(
+    auto_error=False,
+    description="API token cấp cho 1 tenant, hoặc token global (role=admin, tenant='*').",
+)
 
 
 @dataclass
@@ -18,18 +25,15 @@ class Auth:
     request_id: str
 
 
-def _bearer(authorization: str) -> str:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(401, "Thiếu header 'Authorization: Bearer <token>'")
-    return authorization.split(" ", 1)[1].strip()
-
-
 async def auth_ctx(
-    authorization: str = Header(default=""),
-    x_tenant_id: str = Header(default=""),
-    x_request_id: str = Header(default=""),
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    x_tenant_id: str = Header(default="", description="Bắt buộc khi token là global '*'."),
+    x_request_id: str = Header(default="", description="Tùy chọn; echo lại trong response."),
 ) -> Auth:
-    token = _bearer(authorization)
+    if creds is None or not creds.credentials:
+        raise HTTPException(401, "Thiếu header 'Authorization: Bearer <token>'")
+    token = creds.credentials
+
     meta = config.API_TOKENS.get(token)
     if not meta:
         raise HTTPException(401, "Token không hợp lệ")

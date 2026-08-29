@@ -1,0 +1,1532 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "vision-api (face)",
+        "description": "API nh\u1eadn d\u1ea1ng **khu\u00f4n m\u1eb7t** ch\u1ea1y tr\u00ean GPU (InsightFace SCRFD + ArcFace) v\u1edbi **FAISS** index\ntrong RAM, **multi-tenant**.\n\n### X\u00e1c th\u1ef1c\nM\u1ecdi endpoint `/v1/*` v\u00e0 `/admin/*` c\u1ea7n:\n\n| Header | B\u1eaft bu\u1ed9c | Ghi ch\u00fa |\n|---|---|---|\n| `Authorization: Bearer <token>` | \u2705 | token c\u1ea5p cho 1 tenant, ho\u1eb7c token global `*` |\n| `X-Tenant-ID: <tenant>` | khi token l\u00e0 global `*` | ch\u1ecdn tenant thao t\u00e1c |\n| `X-Request-ID: <id>` | t\u00f9y ch\u1ecdn | echo l\u1ea1i trong response; t\u1ef1 sinh n\u1ebfu thi\u1ebfu |\n\nToken `role=admin` m\u1edbi g\u1ecdi \u0111\u01b0\u1ee3c `/admin/reload`.\nRate limit theo tenant (HTTP 429 khi v\u01b0\u1ee3t).\n\n### Lu\u1ed3ng enroll 1 ng\u01b0\u1eddi\n1. `POST /v1/faces/embed` v\u1edbi \u1ea3nh ch\u00e2n dung \u2192 l\u1ea5y `faces[i].embedding` (512-d).\n2. G\u1eedi embedding sang backend (source of truth) \u2014 `POST {backend}/internal/tenants/{tid}/persons`.\n3. `POST /admin/reload?tenant_id={tid}` \u0111\u1ec3 n\u1ea1p l\u1ea1i FAISS.\n4. `POST /v1/faces/search` \u2192 tr\u1ea3 `person_id` + `score`.\n\n### Nh\u1eadn di\u1ec7n\n`POST /v1/faces/search` \u2014 m\u1ed7i khu\u00f4n m\u1eb7t trong \u1ea3nh tr\u1ea3 `match` (top-1 n\u1ebfu `score >= threshold`,\nng\u01b0\u1ee3c l\u1ea1i `null`) k\u00e8m danh s\u00e1ch `candidates`. `score` = cosine similarity (0..1).\n\n### \u1ea2nh \u0111\u1ea7u v\u00e0o\n`multipart/form-data`: field `file` (upload) **ho\u1eb7c** field `url` (link \u1ea3nh http/https).\nGi\u1edbi h\u1ea1n k\u00edch th\u01b0\u1edbc theo `VISION_MAX_IMAGE_BYTES` (m\u1eb7c \u0111\u1ecbnh 20MB).\n",
+        "contact": {
+            "name": "vision-stack",
+            "url": "http://192.168.1.50:18090/docs"
+        },
+        "license": {
+            "name": "internal"
+        },
+        "version": "1.0.0"
+    },
+    "paths": {
+        "/": {
+            "get": {
+                "tags": [
+                    "meta"
+                ],
+                "summary": "Manifest cho client/agent",
+                "description": "B\u1ea3n m\u00f4 t\u1ea3 g\u1ecdn: endpoint, c\u00e1ch auth, lu\u1ed3ng enroll. \u0110\u1ecdc c\u00e1i n\u00e0y tr\u01b0\u1edbc khi g\u1ecdi API.",
+                "operationId": "root__get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RootManifest"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/health": {
+            "get": {
+                "tags": [
+                    "infra"
+                ],
+                "summary": "Liveness \u2014 process c\u00f2n s\u1ed1ng",
+                "operationId": "health_health_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HealthResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/ready": {
+            "get": {
+                "tags": [
+                    "infra"
+                ],
+                "summary": "Readiness \u2014 model + FAISS \u0111\u00e3 s\u1eb5n s\u00e0ng",
+                "operationId": "ready_ready_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ReadyResponse"
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "\u0110ang kh\u1edfi \u0111\u1ed9ng",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ReadyResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/gpu": {
+            "get": {
+                "tags": [
+                    "infra"
+                ],
+                "summary": "Provider ONNX Runtime + VRAM",
+                "operationId": "gpu_gpu_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/GpuResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/faces/detect": {
+            "post": {
+                "tags": [
+                    "faces"
+                ],
+                "summary": "Ph\u00e1t hi\u1ec7n khu\u00f4n m\u1eb7t (bbox, kh\u00f4ng nh\u1eadn d\u1ea1ng)",
+                "operationId": "faces_detect_v1_faces_detect_post",
+                "security": [
+                    {
+                        "HTTPBearer": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "x-tenant-id",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "B\u1eaft bu\u1ed9c khi token l\u00e0 global '*'.",
+                            "default": "",
+                            "title": "X-Tenant-Id"
+                        },
+                        "description": "B\u1eaft bu\u1ed9c khi token l\u00e0 global '*'."
+                    },
+                    {
+                        "name": "x-request-id",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "T\u00f9y ch\u1ecdn; echo l\u1ea1i trong response.",
+                            "default": "",
+                            "title": "X-Request-Id"
+                        },
+                        "description": "T\u00f9y ch\u1ecdn; echo l\u1ea1i trong response."
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Body_faces_detect_v1_faces_detect_post"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/DetectResponse"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Thi\u1ebfu / sai token",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Sai tenant ho\u1eb7c thi\u1ebfu quy\u1ec1n admin",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "V\u01b0\u1ee3t rate limit c\u1ee7a tenant",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service ch\u01b0a `ready`",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/faces/embed": {
+            "post": {
+                "tags": [
+                    "faces"
+                ],
+                "summary": "Tr\u00edch embedding 512-d cho m\u1ed7i khu\u00f4n m\u1eb7t (\u0111\u1ec3 enroll)",
+                "description": "K\u1ebft qu\u1ea3 `faces[i].embedding` (512 s\u1ed1, \u0111\u00e3 L2-norm) l\u00e0 d\u1eef li\u1ec7u g\u1eedi v\u00e0o backend khi enroll.",
+                "operationId": "faces_embed_v1_faces_embed_post",
+                "security": [
+                    {
+                        "HTTPBearer": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "x-tenant-id",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "B\u1eaft bu\u1ed9c khi token l\u00e0 global '*'.",
+                            "default": "",
+                            "title": "X-Tenant-Id"
+                        },
+                        "description": "B\u1eaft bu\u1ed9c khi token l\u00e0 global '*'."
+                    },
+                    {
+                        "name": "x-request-id",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "T\u00f9y ch\u1ecdn; echo l\u1ea1i trong response.",
+                            "default": "",
+                            "title": "X-Request-Id"
+                        },
+                        "description": "T\u00f9y ch\u1ecdn; echo l\u1ea1i trong response."
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Body_faces_embed_v1_faces_embed_post"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/EmbedResponse"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Thi\u1ebfu / sai token",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Sai tenant ho\u1eb7c thi\u1ebfu quy\u1ec1n admin",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "V\u01b0\u1ee3t rate limit c\u1ee7a tenant",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service ch\u01b0a `ready`",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/faces/search": {
+            "post": {
+                "tags": [
+                    "faces"
+                ],
+                "summary": "Nh\u1eadn d\u1ea1ng \u2014 m\u1ed7i khu\u00f4n m\u1eb7t \u2192 person_id + score",
+                "operationId": "faces_search_v1_faces_search_post",
+                "security": [
+                    {
+                        "HTTPBearer": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "top_k",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 50,
+                            "minimum": 1,
+                            "description": "S\u1ed1 candidate tr\u1ea3 v\u1ec1 / m\u1eb7t",
+                            "default": 5,
+                            "title": "Top K"
+                        },
+                        "description": "S\u1ed1 candidate tr\u1ea3 v\u1ec1 / m\u1eb7t"
+                    },
+                    {
+                        "name": "threshold",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number",
+                            "maximum": 1.0,
+                            "minimum": 0.0,
+                            "description": "Ng\u01b0\u1ee1ng cosine \u0111\u1ec3 coi l\u00e0 'match'. Th\u1ea5p h\u01a1n = d\u1ec5 match h\u01a1n (nhi\u1ec1u false positive).",
+                            "default": 0.4,
+                            "title": "Threshold"
+                        },
+                        "description": "Ng\u01b0\u1ee1ng cosine \u0111\u1ec3 coi l\u00e0 'match'. Th\u1ea5p h\u01a1n = d\u1ec5 match h\u01a1n (nhi\u1ec1u false positive)."
+                    },
+                    {
+                        "name": "x-tenant-id",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "B\u1eaft bu\u1ed9c khi token l\u00e0 global '*'.",
+                            "default": "",
+                            "title": "X-Tenant-Id"
+                        },
+                        "description": "B\u1eaft bu\u1ed9c khi token l\u00e0 global '*'."
+                    },
+                    {
+                        "name": "x-request-id",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "T\u00f9y ch\u1ecdn; echo l\u1ea1i trong response.",
+                            "default": "",
+                            "title": "X-Request-Id"
+                        },
+                        "description": "T\u00f9y ch\u1ecdn; echo l\u1ea1i trong response."
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Body_faces_search_v1_faces_search_post"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/SearchResponse"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Thi\u1ebfu / sai token",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Sai tenant ho\u1eb7c thi\u1ebfu quy\u1ec1n admin",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "V\u01b0\u1ee3t rate limit c\u1ee7a tenant",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service ch\u01b0a `ready`",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/reload": {
+            "post": {
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Rebuild FAISS index t\u1eeb backend",
+                "operationId": "admin_reload_admin_reload_post",
+                "security": [
+                    {
+                        "HTTPBearer": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "tenant_id",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "B\u1ecf tr\u1ed1ng = reload t\u1ea5t c\u1ea3 tenant",
+                            "title": "Tenant Id"
+                        },
+                        "description": "B\u1ecf tr\u1ed1ng = reload t\u1ea5t c\u1ea3 tenant"
+                    },
+                    {
+                        "name": "x-tenant-id",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "B\u1eaft bu\u1ed9c khi token l\u00e0 global '*'.",
+                            "default": "",
+                            "title": "X-Tenant-Id"
+                        },
+                        "description": "B\u1eaft bu\u1ed9c khi token l\u00e0 global '*'."
+                    },
+                    {
+                        "name": "x-request-id",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "T\u00f9y ch\u1ecdn; echo l\u1ea1i trong response.",
+                            "default": "",
+                            "title": "X-Request-Id"
+                        },
+                        "description": "T\u00f9y ch\u1ecdn; echo l\u1ea1i trong response."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ReloadResponse"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Thi\u1ebfu / sai token",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Sai tenant ho\u1eb7c thi\u1ebfu quy\u1ec1n admin",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "V\u01b0\u1ee3t rate limit c\u1ee7a tenant",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service ch\u01b0a `ready`",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/index/stats": {
+            "get": {
+                "tags": [
+                    "faces"
+                ],
+                "summary": "S\u1ed1 person / vector \u0111\u00e3 index",
+                "operationId": "index_stats_v1_index_stats_get",
+                "security": [
+                    {
+                        "HTTPBearer": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "x-tenant-id",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "B\u1eaft bu\u1ed9c khi token l\u00e0 global '*'.",
+                            "default": "",
+                            "title": "X-Tenant-Id"
+                        },
+                        "description": "B\u1eaft bu\u1ed9c khi token l\u00e0 global '*'."
+                    },
+                    {
+                        "name": "x-request-id",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "T\u00f9y ch\u1ecdn; echo l\u1ea1i trong response.",
+                            "default": "",
+                            "title": "X-Request-Id"
+                        },
+                        "description": "T\u00f9y ch\u1ecdn; echo l\u1ea1i trong response."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/StatsResponse"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Thi\u1ebfu / sai token",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Sai tenant ho\u1eb7c thi\u1ebfu quy\u1ec1n admin",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "V\u01b0\u1ee3t rate limit c\u1ee7a tenant",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service ch\u01b0a `ready`",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "Body_faces_detect_v1_faces_detect_post": {
+                "properties": {
+                    "file": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "binary"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "File",
+                        "description": "\u1ea2nh upload (jpg/png/\u2026)"
+                    },
+                    "url": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Url",
+                        "description": "Ho\u1eb7c URL \u1ea3nh http/https"
+                    }
+                },
+                "type": "object",
+                "title": "Body_faces_detect_v1_faces_detect_post"
+            },
+            "Body_faces_embed_v1_faces_embed_post": {
+                "properties": {
+                    "file": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "binary"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "File",
+                        "description": "\u1ea2nh ch\u00e2n dung (1 m\u1eb7t l\u00e0 t\u1ed1t nh\u1ea5t)"
+                    },
+                    "url": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Url",
+                        "description": "Ho\u1eb7c URL \u1ea3nh http/https"
+                    }
+                },
+                "type": "object",
+                "title": "Body_faces_embed_v1_faces_embed_post"
+            },
+            "Body_faces_search_v1_faces_search_post": {
+                "properties": {
+                    "file": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "binary"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "File",
+                        "description": "\u1ea2nh c\u1ea7n nh\u1eadn d\u1ea1ng"
+                    },
+                    "url": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Url",
+                        "description": "Ho\u1eb7c URL \u1ea3nh http/https"
+                    }
+                },
+                "type": "object",
+                "title": "Body_faces_search_v1_faces_search_post"
+            },
+            "Candidate": {
+                "properties": {
+                    "person_id": {
+                        "type": "string",
+                        "title": "Person Id",
+                        "examples": [
+                            "p_73a70bd14145"
+                        ]
+                    },
+                    "name": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Name",
+                        "examples": [
+                            "Zidane"
+                        ]
+                    },
+                    "score": {
+                        "type": "number",
+                        "title": "Score",
+                        "description": "Cosine similarity v\u1edbi embedding truy v\u1ea5n (0..1, cao = gi\u1ed1ng).",
+                        "examples": [
+                            1.0
+                        ]
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "person_id",
+                    "score"
+                ],
+                "title": "Candidate"
+            },
+            "DetectResponse": {
+                "properties": {
+                    "request_id": {
+                        "type": "string",
+                        "title": "Request Id",
+                        "examples": [
+                            "req_f6c383fddaf74d09"
+                        ]
+                    },
+                    "tenant_id": {
+                        "type": "string",
+                        "title": "Tenant Id",
+                        "examples": [
+                            "t_demo"
+                        ]
+                    },
+                    "count": {
+                        "type": "integer",
+                        "title": "Count",
+                        "description": "S\u1ed1 khu\u00f4n m\u1eb7t t\u00ecm th\u1ea5y.",
+                        "examples": [
+                            2
+                        ]
+                    },
+                    "faces": {
+                        "items": {
+                            "$ref": "#/components/schemas/FaceBox"
+                        },
+                        "type": "array",
+                        "title": "Faces"
+                    },
+                    "inference_ms": {
+                        "type": "number",
+                        "title": "Inference Ms",
+                        "description": "Th\u1eddi gian suy lu\u1eadn GPU (ms).",
+                        "examples": [
+                            41.2
+                        ]
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "request_id",
+                    "tenant_id",
+                    "count",
+                    "faces",
+                    "inference_ms"
+                ],
+                "title": "DetectResponse"
+            },
+            "EmbedFace": {
+                "properties": {
+                    "bbox_xyxy": {
+                        "items": {
+                            "type": "number"
+                        },
+                        "type": "array",
+                        "title": "Bbox Xyxy",
+                        "description": "Bounding box [x1, y1, x2, y2] theo pixel \u1ea3nh g\u1ed1c.",
+                        "examples": [
+                            [
+                                913.4,
+                                96.3,
+                                1057.1,
+                                276.2
+                            ]
+                        ]
+                    },
+                    "det_score": {
+                        "type": "number",
+                        "title": "Det Score",
+                        "description": "\u0110\u1ed9 tin c\u1eady c\u1ee7a face detector (0..1).",
+                        "examples": [
+                            0.8714
+                        ]
+                    },
+                    "embedding": {
+                        "items": {
+                            "type": "number"
+                        },
+                        "type": "array",
+                        "maxItems": 512,
+                        "minItems": 512,
+                        "title": "Embedding",
+                        "description": "Vector nh\u1eadn d\u1ea1ng 512 chi\u1ec1u, \u0110\u00c3 L2-normalize (norm=1). D\u00f9ng l\u00e0m d\u1eef li\u1ec7u enroll g\u1eedi v\u00e0o backend.",
+                        "examples": [
+                            [
+                                0.0299,
+                                0.0189,
+                                -0.0228,
+                                -0.0827,
+                                "...(508 s\u1ed1 n\u1eefa)"
+                            ]
+                        ]
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "bbox_xyxy",
+                    "det_score",
+                    "embedding"
+                ],
+                "title": "EmbedFace"
+            },
+            "EmbedResponse": {
+                "properties": {
+                    "request_id": {
+                        "type": "string",
+                        "title": "Request Id"
+                    },
+                    "tenant_id": {
+                        "type": "string",
+                        "title": "Tenant Id"
+                    },
+                    "model": {
+                        "type": "string",
+                        "title": "Model",
+                        "description": "T\u00ean model pack InsightFace.",
+                        "examples": [
+                            "buffalo_l"
+                        ]
+                    },
+                    "dim": {
+                        "type": "integer",
+                        "title": "Dim",
+                        "default": 512,
+                        "examples": [
+                            512
+                        ]
+                    },
+                    "count": {
+                        "type": "integer",
+                        "title": "Count"
+                    },
+                    "faces": {
+                        "items": {
+                            "$ref": "#/components/schemas/EmbedFace"
+                        },
+                        "type": "array",
+                        "title": "Faces"
+                    },
+                    "inference_ms": {
+                        "type": "number",
+                        "title": "Inference Ms"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "request_id",
+                    "tenant_id",
+                    "model",
+                    "count",
+                    "faces",
+                    "inference_ms"
+                ],
+                "title": "EmbedResponse"
+            },
+            "ErrorResponse": {
+                "properties": {
+                    "detail": {
+                        "type": "string",
+                        "title": "Detail",
+                        "examples": [
+                            "Token kh\u00f4ng h\u1ee3p l\u1ec7"
+                        ]
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "detail"
+                ],
+                "title": "ErrorResponse"
+            },
+            "FaceBox": {
+                "properties": {
+                    "bbox_xyxy": {
+                        "items": {
+                            "type": "number"
+                        },
+                        "type": "array",
+                        "title": "Bbox Xyxy",
+                        "description": "Bounding box [x1, y1, x2, y2] theo pixel \u1ea3nh g\u1ed1c.",
+                        "examples": [
+                            [
+                                913.4,
+                                96.3,
+                                1057.1,
+                                276.2
+                            ]
+                        ]
+                    },
+                    "det_score": {
+                        "type": "number",
+                        "title": "Det Score",
+                        "description": "\u0110\u1ed9 tin c\u1eady c\u1ee7a face detector (0..1).",
+                        "examples": [
+                            0.8714
+                        ]
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "bbox_xyxy",
+                    "det_score"
+                ],
+                "title": "FaceBox"
+            },
+            "GpuResponse": {
+                "properties": {
+                    "provider": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Provider",
+                        "examples": [
+                            "CUDAExecutionProvider"
+                        ]
+                    },
+                    "onnxruntime_providers": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "title": "Onnxruntime Providers",
+                        "examples": [
+                            [
+                                "TensorrtExecutionProvider",
+                                "CUDAExecutionProvider",
+                                "CPUExecutionProvider"
+                            ]
+                        ]
+                    },
+                    "name": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Name",
+                        "examples": [
+                            "NVIDIA GeForce GTX 1650"
+                        ]
+                    },
+                    "vram_total_mb": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Vram Total Mb",
+                        "examples": [
+                            4096
+                        ]
+                    },
+                    "vram_used_mb": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Vram Used Mb",
+                        "examples": [
+                            686
+                        ]
+                    },
+                    "gpu_util_pct": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Gpu Util Pct",
+                        "examples": [
+                            0
+                        ]
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "onnxruntime_providers"
+                ],
+                "title": "GpuResponse"
+            },
+            "HTTPValidationError": {
+                "properties": {
+                    "detail": {
+                        "items": {
+                            "$ref": "#/components/schemas/ValidationError"
+                        },
+                        "type": "array",
+                        "title": "Detail"
+                    }
+                },
+                "type": "object",
+                "title": "HTTPValidationError"
+            },
+            "HealthResponse": {
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "title": "Status",
+                        "default": "ok",
+                        "examples": [
+                            "ok"
+                        ]
+                    },
+                    "uptime_s": {
+                        "type": "number",
+                        "title": "Uptime S",
+                        "examples": [
+                            128.4
+                        ]
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "uptime_s"
+                ],
+                "title": "HealthResponse"
+            },
+            "ReadyResponse": {
+                "properties": {
+                    "ready": {
+                        "type": "boolean",
+                        "title": "Ready",
+                        "description": "true = model + FAISS s\u1eb5n s\u00e0ng nh\u1eadn request."
+                    },
+                    "detail": {
+                        "type": "string",
+                        "title": "Detail",
+                        "examples": [
+                            "ready",
+                            "loading model",
+                            "sync embeddings"
+                        ]
+                    },
+                    "provider": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Provider",
+                        "examples": [
+                            "CUDAExecutionProvider"
+                        ]
+                    },
+                    "model": {
+                        "type": "string",
+                        "title": "Model",
+                        "examples": [
+                            "buffalo_l"
+                        ]
+                    },
+                    "indexed": {
+                        "additionalProperties": true,
+                        "type": "object",
+                        "title": "Indexed",
+                        "description": "Th\u1ed1ng k\u00ea index theo tenant.",
+                        "examples": [
+                            {
+                                "t_demo": {
+                                    "persons": 12,
+                                    "vectors": 34
+                                }
+                            }
+                        ]
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "ready",
+                    "detail",
+                    "model",
+                    "indexed"
+                ],
+                "title": "ReadyResponse"
+            },
+            "ReloadResponse": {
+                "properties": {
+                    "reloaded": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "title": "Reloaded",
+                        "examples": [
+                            [
+                                "t_demo"
+                            ]
+                        ]
+                    },
+                    "stats": {
+                        "additionalProperties": true,
+                        "type": "object",
+                        "title": "Stats",
+                        "examples": [
+                            {
+                                "t_demo": {
+                                    "persons": 2,
+                                    "vectors": 2
+                                }
+                            }
+                        ]
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "reloaded",
+                    "stats"
+                ],
+                "title": "ReloadResponse"
+            },
+            "RootManifest": {
+                "properties": {
+                    "service": {
+                        "type": "string",
+                        "title": "Service"
+                    },
+                    "version": {
+                        "type": "string",
+                        "title": "Version"
+                    },
+                    "ready_url": {
+                        "type": "string",
+                        "title": "Ready Url"
+                    },
+                    "docs": {
+                        "additionalProperties": true,
+                        "type": "object",
+                        "title": "Docs"
+                    },
+                    "auth": {
+                        "additionalProperties": true,
+                        "type": "object",
+                        "title": "Auth"
+                    },
+                    "endpoints": {
+                        "items": {
+                            "additionalProperties": true,
+                            "type": "object"
+                        },
+                        "type": "array",
+                        "title": "Endpoints"
+                    },
+                    "enroll_flow": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "title": "Enroll Flow"
+                    },
+                    "notes": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "title": "Notes"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "service",
+                    "version",
+                    "ready_url",
+                    "docs",
+                    "auth",
+                    "endpoints",
+                    "enroll_flow",
+                    "notes"
+                ],
+                "title": "RootManifest",
+                "description": "B\u1ea3n m\u00f4 t\u1ea3 g\u1ecdn cho AI agent / client t\u1ef1 kh\u00e1m ph\u00e1."
+            },
+            "SearchFace": {
+                "properties": {
+                    "bbox_xyxy": {
+                        "items": {
+                            "type": "number"
+                        },
+                        "type": "array",
+                        "title": "Bbox Xyxy",
+                        "description": "Bounding box [x1, y1, x2, y2] theo pixel \u1ea3nh g\u1ed1c.",
+                        "examples": [
+                            [
+                                913.4,
+                                96.3,
+                                1057.1,
+                                276.2
+                            ]
+                        ]
+                    },
+                    "det_score": {
+                        "type": "number",
+                        "title": "Det Score",
+                        "description": "\u0110\u1ed9 tin c\u1eady c\u1ee7a face detector (0..1).",
+                        "examples": [
+                            0.8714
+                        ]
+                    },
+                    "match": {
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/Candidate"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "description": "Candidate top-1 N\u1ebeU score >= threshold, ng\u01b0\u1ee3c l\u1ea1i null (kh\u00f4ng nh\u1eadn ra)."
+                    },
+                    "candidates": {
+                        "items": {
+                            "$ref": "#/components/schemas/Candidate"
+                        },
+                        "type": "array",
+                        "title": "Candidates",
+                        "description": "T\u1ed1i \u0111a top_k candidate, gi\u1ea3m d\u1ea7n theo score (\u0111\u00e3 g\u1ed9p tr\u00f9ng person)."
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "bbox_xyxy",
+                    "det_score",
+                    "candidates"
+                ],
+                "title": "SearchFace"
+            },
+            "SearchIndexInfo": {
+                "properties": {
+                    "persons": {
+                        "type": "integer",
+                        "title": "Persons",
+                        "examples": [
+                            2
+                        ]
+                    },
+                    "vectors": {
+                        "type": "integer",
+                        "title": "Vectors",
+                        "examples": [
+                            2
+                        ]
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "persons",
+                    "vectors"
+                ],
+                "title": "SearchIndexInfo"
+            },
+            "SearchResponse": {
+                "properties": {
+                    "request_id": {
+                        "type": "string",
+                        "title": "Request Id"
+                    },
+                    "tenant_id": {
+                        "type": "string",
+                        "title": "Tenant Id"
+                    },
+                    "count": {
+                        "type": "integer",
+                        "title": "Count"
+                    },
+                    "faces": {
+                        "items": {
+                            "$ref": "#/components/schemas/SearchFace"
+                        },
+                        "type": "array",
+                        "title": "Faces"
+                    },
+                    "threshold": {
+                        "type": "number",
+                        "title": "Threshold",
+                        "examples": [
+                            0.4
+                        ]
+                    },
+                    "inference_ms": {
+                        "type": "number",
+                        "title": "Inference Ms"
+                    },
+                    "index": {
+                        "$ref": "#/components/schemas/SearchIndexInfo"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "request_id",
+                    "tenant_id",
+                    "count",
+                    "faces",
+                    "threshold",
+                    "inference_ms",
+                    "index"
+                ],
+                "title": "SearchResponse"
+            },
+            "StatsResponse": {
+                "properties": {
+                    "stats": {
+                        "additionalProperties": true,
+                        "type": "object",
+                        "title": "Stats",
+                        "examples": [
+                            {
+                                "t_demo": {
+                                    "persons": 2,
+                                    "vectors": 2
+                                }
+                            }
+                        ]
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "stats"
+                ],
+                "title": "StatsResponse"
+            },
+            "ValidationError": {
+                "properties": {
+                    "loc": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "type": "array",
+                        "title": "Location"
+                    },
+                    "msg": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "type": {
+                        "type": "string",
+                        "title": "Error Type"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "loc",
+                    "msg",
+                    "type"
+                ],
+                "title": "ValidationError"
+            }
+        },
+        "securitySchemes": {
+            "HTTPBearer": {
+                "type": "http",
+                "description": "API token c\u1ea5p cho 1 tenant, ho\u1eb7c token global (role=admin, tenant='*').",
+                "scheme": "bearer"
+            }
+        }
+    },
+    "tags": [
+        {
+            "name": "infra",
+            "description": "Liveness / readiness / th\u00f4ng tin GPU. Kh\u00f4ng c\u1ea7n auth."
+        },
+        {
+            "name": "faces",
+            "description": "Detect / embed / search khu\u00f4n m\u1eb7t. C\u1ea7n token client."
+        },
+        {
+            "name": "admin",
+            "description": "Qu\u1ea3n tr\u1ecb index. C\u1ea7n token role=admin."
+        },
+        {
+            "name": "meta",
+            "description": "B\u1ea3n m\u00f4 t\u1ea3 API cho client / AI agent t\u1ef1 kh\u00e1m ph\u00e1."
+        }
+    ]
+}
