@@ -2,7 +2,7 @@
     "openapi": "3.1.0",
     "info": {
         "title": "vision-api (face)",
-        "description": "API nh\u1eadn d\u1ea1ng **khu\u00f4n m\u1eb7t** ch\u1ea1y tr\u00ean GPU (InsightFace SCRFD + ArcFace) v\u1edbi **FAISS** index\ntrong RAM, **multi-tenant**.\n\n### X\u00e1c th\u1ef1c\nM\u1ecdi endpoint `/v1/*` v\u00e0 `/admin/*` c\u1ea7n:\n\n| Header | B\u1eaft bu\u1ed9c | Ghi ch\u00fa |\n|---|---|---|\n| `Authorization: Bearer <token>` | \u2705 | token c\u1ea5p cho 1 tenant, ho\u1eb7c token global `*` |\n| `X-Tenant-ID: <tenant>` | khi token l\u00e0 global `*` | ch\u1ecdn tenant thao t\u00e1c |\n| `X-Request-ID: <id>` | t\u00f9y ch\u1ecdn | echo l\u1ea1i trong response; t\u1ef1 sinh n\u1ebfu thi\u1ebfu |\n\nToken `role=admin` m\u1edbi g\u1ecdi \u0111\u01b0\u1ee3c `/admin/reload`.\nRate limit theo tenant (HTTP 429 khi v\u01b0\u1ee3t).\n\n### Lu\u1ed3ng enroll 1 ng\u01b0\u1eddi\n1. `POST /v1/faces/embed` v\u1edbi \u1ea3nh ch\u00e2n dung \u2192 l\u1ea5y `faces[i].embedding` (512-d).\n2. G\u1eedi embedding sang backend (source of truth) \u2014 `POST {backend}/internal/tenants/{tid}/persons`.\n3. `POST /admin/reload?tenant_id={tid}` \u0111\u1ec3 n\u1ea1p l\u1ea1i FAISS.\n4. `POST /v1/faces/search` \u2192 tr\u1ea3 `person_id` + `score`.\n\n### Nh\u1eadn di\u1ec7n\n`POST /v1/faces/search` \u2014 m\u1ed7i khu\u00f4n m\u1eb7t trong \u1ea3nh tr\u1ea3 `match` (top-1 n\u1ebfu `score >= threshold`,\nng\u01b0\u1ee3c l\u1ea1i `null`) k\u00e8m danh s\u00e1ch `candidates`. `score` = cosine similarity (0..1).\n\n### \u1ea2nh \u0111\u1ea7u v\u00e0o\n`multipart/form-data`: field `file` (upload) **ho\u1eb7c** field `url` (link \u1ea3nh http/https).\nGi\u1edbi h\u1ea1n k\u00edch th\u01b0\u1edbc theo `VISION_MAX_IMAGE_BYTES` (m\u1eb7c \u0111\u1ecbnh 20MB).\n",
+        "description": "API nh\u1eadn d\u1ea1ng **khu\u00f4n m\u1eb7t** ch\u1ea1y tr\u00ean GPU (InsightFace SCRFD + ArcFace) v\u1edbi **FAISS** index\ntrong RAM, **multi-tenant**.\n\n### X\u00e1c th\u1ef1c\nM\u1ecdi endpoint `/v1/*` v\u00e0 `/admin/*` c\u1ea7n:\n\n| Header | B\u1eaft bu\u1ed9c | Ghi ch\u00fa |\n|---|---|---|\n| `Authorization: Bearer <token>` | \u2705 | token c\u1ea5p cho 1 tenant, ho\u1eb7c token global `*` |\n| `X-Tenant-ID: <tenant>` | khi token l\u00e0 global `*` | ch\u1ecdn tenant thao t\u00e1c |\n| `X-Request-ID: <id>` | t\u00f9y ch\u1ecdn | echo l\u1ea1i trong response; t\u1ef1 sinh n\u1ebfu thi\u1ebfu |\n\nToken `role=admin` m\u1edbi g\u1ecdi \u0111\u01b0\u1ee3c `/admin/reload`.\nRate limit theo tenant (HTTP 429 khi v\u01b0\u1ee3t).\n\n### Lu\u1ed3ng enroll 1 ng\u01b0\u1eddi\n1. `POST /v1/faces/embed` v\u1edbi \u1ea3nh ch\u00e2n dung \u2192 l\u1ea5y `faces[i].embedding` (512-d).\n2. G\u1eedi embedding sang backend (source of truth) \u2014 `POST {backend}/internal/tenants/{tid}/persons`.\n3. `POST /admin/reload?tenant_id={tid}` \u0111\u1ec3 n\u1ea1p l\u1ea1i FAISS.\n4. `POST /v1/faces/search` \u2192 tr\u1ea3 `person_id` + `score`.\n\n### \u1ea2nh \u0111\u1ea7u v\u00e0o\n`multipart/form-data`: field `file` (upload) **ho\u1eb7c** field `url` (link \u1ea3nh http/https).\nURL b\u1ecb ch\u1eb7n n\u1ebfu tr\u1ecf v\u00e0o IP n\u1ed9i b\u1ed9/loopback, v\u00e0 kh\u00f4ng theo redirect (ch\u1ed1ng SSRF).\nGi\u1edbi h\u1ea1n dung l\u01b0\u1ee3ng `VISION_MAX_IMAGE_BYTES` (m\u1eb7c \u0111\u1ecbnh 20MB), s\u1ed1 pixel `VISION_MAX_IMAGE_PIXELS`.\n\n### V\u1eadn h\u00e0nh\n`GET /metrics` \u2014 Prometheus. `GET /health` liveness, `GET /ready` readiness.\n",
         "contact": {
             "name": "vision-stack",
             "url": "http://192.168.1.50:18090/docs"
@@ -10,7 +10,7 @@
         "license": {
             "name": "internal"
         },
-        "version": "1.0.0"
+        "version": "1.1.0"
     },
     "paths": {
         "/": {
@@ -108,6 +108,25 @@
                 }
             }
         },
+        "/metrics": {
+            "get": {
+                "tags": [
+                    "infra"
+                ],
+                "summary": "Prometheus metrics (LAN \u2014 n\u00ean firewall)",
+                "operationId": "prometheus_metrics_metrics_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/v1/faces/detect": {
             "post": {
                 "tags": [
@@ -162,6 +181,16 @@
                             "application/json": {
                                 "schema": {
                                     "$ref": "#/components/schemas/DetectResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "\u1ea2nh/URL kh\u00f4ng h\u1ee3p l\u1ec7",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
                                 }
                             }
                         }
@@ -274,6 +303,16 @@
                             "application/json": {
                                 "schema": {
                                     "$ref": "#/components/schemas/EmbedResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "\u1ea2nh/URL kh\u00f4ng h\u1ee3p l\u1ec7",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
                                 }
                             }
                         }
@@ -417,6 +456,16 @@
                             }
                         }
                     },
+                    "400": {
+                        "description": "\u1ea2nh/URL kh\u00f4ng h\u1ee3p l\u1ec7",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
                     "401": {
                         "description": "Thi\u1ebfu / sai token",
                         "content": {
@@ -537,6 +586,16 @@
                             }
                         }
                     },
+                    "400": {
+                        "description": "\u1ea2nh/URL kh\u00f4ng h\u1ee3p l\u1ec7",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
                     "401": {
                         "description": "Thi\u1ebfu / sai token",
                         "content": {
@@ -635,6 +694,16 @@
                             "application/json": {
                                 "schema": {
                                     "$ref": "#/components/schemas/StatsResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "\u1ea2nh/URL kh\u00f4ng h\u1ee3p l\u1ec7",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
                                 }
                             }
                         }
@@ -1514,7 +1583,7 @@
     "tags": [
         {
             "name": "infra",
-            "description": "Liveness / readiness / th\u00f4ng tin GPU. Kh\u00f4ng c\u1ea7n auth."
+            "description": "Liveness / readiness / GPU / metrics. Kh\u00f4ng c\u1ea7n auth."
         },
         {
             "name": "faces",

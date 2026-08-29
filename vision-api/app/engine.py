@@ -7,6 +7,9 @@ from PIL import Image
 
 from . import config
 
+# Chống decompression bomb: ảnh quá nhiều pixel -> PIL raise DecompressionBombError
+Image.MAX_IMAGE_PIXELS = config.MAX_IMAGE_PIXELS
+
 
 class FaceEngine:
     def __init__(self) -> None:

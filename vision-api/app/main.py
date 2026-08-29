@@ -13,11 +13,10 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-import httpx
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import JSONResponse, Response
 
-from . import config, schemas
+from . import config, metrics, net, schemas
 from .backend import BackendClient
 from .deps import Auth, RateLimiter, auth_ctx, require_tenant
 from .engine import FaceEngine
@@ -53,23 +52,24 @@ Rate limit theo tenant (HTTP 429 khi vượt).
 3. `POST /admin/reload?tenant_id={tid}` để nạp lại FAISS.
 4. `POST /v1/faces/search` → trả `person_id` + `score`.
 
-### Nhận diện
-`POST /v1/faces/search` — mỗi khuôn mặt trong ảnh trả `match` (top-1 nếu `score >= threshold`,
-ngược lại `null`) kèm danh sách `candidates`. `score` = cosine similarity (0..1).
-
 ### Ảnh đầu vào
 `multipart/form-data`: field `file` (upload) **hoặc** field `url` (link ảnh http/https).
-Giới hạn kích thước theo `VISION_MAX_IMAGE_BYTES` (mặc định 20MB).
+URL bị chặn nếu trỏ vào IP nội bộ/loopback, và không theo redirect (chống SSRF).
+Giới hạn dung lượng `VISION_MAX_IMAGE_BYTES` (mặc định 20MB), số pixel `VISION_MAX_IMAGE_PIXELS`.
+
+### Vận hành
+`GET /metrics` — Prometheus. `GET /health` liveness, `GET /ready` readiness.
 """
 
 TAGS = [
-    {"name": "infra", "description": "Liveness / readiness / thông tin GPU. Không cần auth."},
+    {"name": "infra", "description": "Liveness / readiness / GPU / metrics. Không cần auth."},
     {"name": "faces", "description": "Detect / embed / search khuôn mặt. Cần token client."},
     {"name": "admin", "description": "Quản trị index. Cần token role=admin."},
     {"name": "meta", "description": "Bản mô tả API cho client / AI agent tự khám phá."},
 ]
 
 COMMON_ERRORS = {
+    400: {"model": schemas.ErrorResponse, "description": "Ảnh/URL không hợp lệ"},
     401: {"model": schemas.ErrorResponse, "description": "Thiếu / sai token"},
     403: {"model": schemas.ErrorResponse, "description": "Sai tenant hoặc thiếu quyền admin"},
     429: {"model": schemas.ErrorResponse, "description": "Vượt rate limit của tenant"},
@@ -97,10 +97,13 @@ async def lifespan(_: FastAPI):
 
         STATE["ready"] = True
         STATE["detail"] = STATE["detail"] if "fail" in STATE["detail"] else "ready"
+        metrics.READY.set(1)
+        metrics.refresh_index_gauges(store.stats())
         print(f"[boot] READY provider={engine.provider} {STATE['detail']}")
     except Exception as e:  # noqa: BLE001
         STATE["ready"] = False
         STATE["detail"] = f"startup error: {e}"
+        metrics.READY.set(0)
         print(f"[boot] FAILED: {e}")
         raise
     yield
@@ -109,7 +112,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="vision-api (face)",
-    version="1.0.0",
+    version="1.1.0",
     description=DESCRIPTION,
     openapi_tags=TAGS,
     contact={"name": "vision-stack", "url": "http://192.168.1.50:18090/docs"},
@@ -118,34 +121,69 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def _metrics_mw(request: Request, call_next):
+    if not config.METRICS_ENABLED:
+        return await call_next(request)
+    ep = metrics.norm_path(request.url.path)
+    t0 = time.perf_counter()
+    try:
+        resp = await call_next(request)
+        status = resp.status_code
+    except Exception:
+        metrics.REQUESTS.labels(ep, request.method, "500").inc()
+        raise
+    metrics.REQ_DURATION.labels(ep).observe(time.perf_counter() - t0)
+    metrics.REQUESTS.labels(ep, request.method, str(status)).inc()
+    return resp
+
+
 # ------------------------------- helpers ------------------------------------- #
 
 async def _read_image(file: Optional[UploadFile], url: Optional[str]) -> bytes:
     if file is not None:
-        raw = await file.read()
-    elif url:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
-            r = await c.get(url)
-            r.raise_for_status()
-            raw = r.content
-    else:
-        raise HTTPException(422, "Cần 'file' (multipart) hoặc 'url'")
-    if len(raw) > config.MAX_IMAGE_BYTES:
-        raise HTTPException(413, "Ảnh quá lớn")
-    return raw
+        raw = await file.read(config.MAX_IMAGE_BYTES + 1)
+        if len(raw) > config.MAX_IMAGE_BYTES:
+            raise HTTPException(413, "Ảnh quá lớn")
+        return raw
+    if url:
+        try:
+            net.assert_fetchable(url)
+            return await net.fetch_image(url, config.MAX_IMAGE_BYTES)
+        except net.UrlNotAllowed as e:
+            raise HTTPException(400, f"URL không dùng được: {e}")
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"Không tải được ảnh: {e}")
+    raise HTTPException(422, "Cần 'file' (multipart) hoặc 'url'")
 
 
-async def _analyze(raw: bytes):
+async def _analyze(raw: bytes, kind: str):
     loop = asyncio.get_event_loop()
-    bgr = await loop.run_in_executor(None, engine.decode, raw)
+    try:
+        bgr = await loop.run_in_executor(None, engine.decode, raw)
+    except Exception as e:  # noqa: BLE001 - ảnh hỏng / bomb
+        raise HTTPException(400, f"Ảnh không hợp lệ: {e}")
     async with gpu_sem:
         faces, ms = await loop.run_in_executor(None, engine.analyze, bgr)
+    if config.METRICS_ENABLED:
+        metrics.INFERENCE.labels(kind).observe(ms / 1000.0)
     return faces, ms
 
 
 def _guard_ready() -> None:
     if not STATE["ready"]:
         raise HTTPException(503, f"Service chưa sẵn sàng: {STATE['detail']}")
+
+
+async def _rate_check(auth: Auth) -> None:
+    try:
+        await limiter.check(auth.tenant)
+    except HTTPException:
+        if config.METRICS_ENABLED:
+            metrics.RATELIMIT_REJECTS.labels(auth.tenant).inc()
+        raise
 
 
 # ------------------------------- meta -------------------------------------- #
@@ -155,9 +193,10 @@ async def root():
     """Bản mô tả gọn: endpoint, cách auth, luồng enroll. Đọc cái này trước khi gọi API."""
     return {
         "service": "vision-api (face)",
-        "version": "1.0.0",
+        "version": app.version,
         "ready_url": "/ready",
-        "docs": {"swagger": "/docs", "redoc": "/redoc", "openapi": "/openapi.json"},
+        "docs": {"swagger": "/docs", "redoc": "/redoc", "openapi": "/openapi.json",
+                 "metrics": "/metrics"},
         "auth": {
             "scheme": "Authorization: Bearer <token>",
             "tenant_header": "X-Tenant-ID (bắt buộc nếu token global '*')",
@@ -169,6 +208,7 @@ async def root():
             {"method": "GET", "path": "/health", "auth": False, "desc": "liveness"},
             {"method": "GET", "path": "/ready", "auth": False, "desc": "readiness + trạng thái index"},
             {"method": "GET", "path": "/gpu", "auth": False, "desc": "provider ORT + VRAM"},
+            {"method": "GET", "path": "/metrics", "auth": False, "desc": "Prometheus"},
             {"method": "POST", "path": "/v1/faces/detect", "auth": "client",
              "desc": "ảnh -> bbox + det_score", "body": "multipart file|url"},
             {"method": "POST", "path": "/v1/faces/embed", "auth": "client",
@@ -247,6 +287,16 @@ async def gpu():
     return info
 
 
+@app.get("/metrics", tags=["infra"], summary="Prometheus metrics (LAN — nên firewall)")
+async def prometheus_metrics():
+    if not config.METRICS_ENABLED:
+        raise HTTPException(404, "metrics disabled")
+    metrics.refresh_gpu_gauges()
+    metrics.refresh_index_gauges(store.stats())
+    body, ctype = metrics.render()
+    return Response(content=body, media_type=ctype)
+
+
 # ------------------------------- face endpoints ---------------------------- #
 
 @app.post(
@@ -263,8 +313,10 @@ async def faces_detect(
 ):
     _guard_ready()
     require_tenant(auth)
-    await limiter.check(auth.tenant)
-    faces, ms = await _analyze(await _read_image(file, url))
+    await _rate_check(auth)
+    faces, ms = await _analyze(await _read_image(file, url), "detect")
+    if config.METRICS_ENABLED:
+        metrics.FACES_DETECTED.labels(auth.tenant).inc(len(faces))
     return {
         "request_id": auth.request_id,
         "tenant_id": auth.tenant,
@@ -289,8 +341,10 @@ async def faces_embed(
     """Kết quả `faces[i].embedding` (512 số, đã L2-norm) là dữ liệu gửi vào backend khi enroll."""
     _guard_ready()
     require_tenant(auth)
-    await limiter.check(auth.tenant)
-    faces, ms = await _analyze(await _read_image(file, url))
+    await _rate_check(auth)
+    faces, ms = await _analyze(await _read_image(file, url), "embed")
+    if config.METRICS_ENABLED:
+        metrics.FACES_DETECTED.labels(auth.tenant).inc(len(faces))
     return {
         "request_id": auth.request_id,
         "tenant_id": auth.tenant,
@@ -328,14 +382,17 @@ async def faces_search(
 ):
     _guard_ready()
     require_tenant(auth)
-    await limiter.check(auth.tenant)
+    await _rate_check(auth)
     idx = await store.ensure(auth.tenant)
-    faces, ms = await _analyze(await _read_image(file, url))
+    faces, ms = await _analyze(await _read_image(file, url), "search")
 
     results = []
+    n_match = 0
     for f in faces:
         cands = idx.search(f["embedding"], top_k)
         match = cands[0] if cands and cands[0]["score"] >= threshold else None
+        if match:
+            n_match += 1
         results.append(
             {
                 "bbox_xyxy": f["bbox_xyxy"],
@@ -344,6 +401,11 @@ async def faces_search(
                 "candidates": cands,
             }
         )
+
+    if config.METRICS_ENABLED:
+        metrics.FACES_DETECTED.labels(auth.tenant).inc(len(results))
+        if n_match:
+            metrics.MATCHES.labels(auth.tenant).inc(n_match)
 
     if config.POST_EVENTS:
         asyncio.create_task(
@@ -384,9 +446,13 @@ async def admin_reload(
         raise HTTPException(403, "Cần token role=admin")
     if tenant_id:
         await store.reload(tenant_id)
-        return {"reloaded": [tenant_id], "stats": store.stats(tenant_id)}
-    tids = await store.reload_all()
-    return {"reloaded": tids, "stats": store.stats()}
+        out = {"reloaded": [tenant_id], "stats": store.stats(tenant_id)}
+    else:
+        tids = await store.reload_all()
+        out = {"reloaded": tids, "stats": store.stats()}
+    if config.METRICS_ENABLED:
+        metrics.refresh_index_gauges(store.stats())
+    return out
 
 
 @app.get(

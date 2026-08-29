@@ -19,6 +19,11 @@ Proxmox promox
 Đợt này: **chỉ Face**, **LAN only** (chưa Tailscale/domain). Body ReID / Vehicle / OCR thêm sau
 vào cùng `vision-api` (đo VRAM rồi mới bật, GTX 1650 chỉ 4GB).
 
+> **Chưa production.** Xem [`GO-LIVE.md`](./GO-LIVE.md) (checklist blocker) và
+> [`BACKEND-CONTRACT.md`](./BACKEND-CONTRACT.md) (spec backend thật cần implement).
+> Đã có: SSRF guard cho `url=`, container non-root (uid 10001), model bake sẵn trong image,
+> `GET /metrics` (Prometheus).
+
 ## Boot sequence (gate `/ready`)
 ```
 load SCRFD+ArcFace  ->  warmup GPU  ->  GET /internal/tenants

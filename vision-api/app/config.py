@@ -21,6 +21,13 @@ PREFETCH_ON_START = os.getenv("VISION_PREFETCH_ON_START", "true").lower() == "tr
 GPU_CONCURRENCY = int(os.getenv("VISION_GPU_CONCURRENCY", "1"))
 RATE_LIMIT_PER_MIN = int(os.getenv("VISION_RATE_LIMIT_PER_MIN", "120"))
 MAX_IMAGE_BYTES = int(os.getenv("VISION_MAX_IMAGE_BYTES", str(20 * 1024 * 1024)))
+MAX_IMAGE_PIXELS = int(os.getenv("VISION_MAX_IMAGE_PIXELS", str(40_000_000)))
+
+# SSRF: tải ảnh theo URL. Mặc định bật nhưng chặn IP nội bộ + không theo redirect.
+ALLOW_URL_FETCH = os.getenv("VISION_ALLOW_URL_FETCH", "true").lower() == "true"
+URL_ALLOWLIST = [d.strip().lower() for d in os.getenv("VISION_URL_ALLOWLIST", "").split(",") if d.strip()]
+
+METRICS_ENABLED = os.getenv("VISION_METRICS_ENABLED", "true").lower() == "true"
 
 # VISION_API_TOKENS = JSON: {"<token>": {"tenant": "t_demo" | "*", "role": "client" | "admin"}}
 _raw = os.getenv("VISION_API_TOKENS", "").strip()

@@ -23,12 +23,12 @@ Mọi endpoint `/v1/*` và `/admin/*`:
 - Rate limit: `120/phút/tenant` (mặc định) → HTTP `429`.
 - Token khai trong biến môi trường `VISION_API_TOKENS` (JSON) — xem `.env`.
 
-Token môi trường hiện tại (LAN/dev):
+Token khai trong `.env` (KHÔNG commit). Placeholder dưới đây thay bằng token thật của bạn:
 
 | role | token | tenant |
 |---|---|---|
-| client | `tok_e41ba47e74ddea06ff625786a0b1048c8667926f` | `t_demo` |
-| admin | `tok_63110dbb27c6fcdb118c2dd5ccc73f965232920a` | `*` |
+| client | `<CLIENT_TOKEN>` | `t_demo` |
+| admin | `<ADMIN_TOKEN>` | `*` |
 
 ---
 
@@ -151,7 +151,7 @@ Body lỗi: `{ "detail": "<mô tả>" }`.
 ### curl
 ```bash
 API=http://192.168.1.50:18090
-TOKEN=tok_e41ba47e74ddea06ff625786a0b1048c8667926f
+TOKEN=<CLIENT_TOKEN>
 H=(-H "Authorization: Bearer $TOKEN" -H "X-Tenant-ID: t_demo")
 
 curl "${H[@]}" -F file=@photo.jpg "$API/v1/faces/detect"
@@ -166,7 +166,7 @@ import requests
 API = "http://192.168.1.50:18090"
 S = requests.Session()
 S.headers.update({
-    "Authorization": "Bearer tok_e41ba47e74ddea06ff625786a0b1048c8667926f",
+    "Authorization": "Bearer <CLIENT_TOKEN>",
     "X-Tenant-ID": "t_demo",
 })
 
