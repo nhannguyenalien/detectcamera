@@ -1,0 +1,12 @@
+# cp .dev.vars.example .dev.vars   (KHÔNG commit — đã gitignore)
+DATABASE_URL="postgresql://USER:PASS@ep-xxx-pooler.REGION.aws.neon.tech/neondb?sslmode=require"
+INTERNAL_KEY="dev-internal-key"
+VISION_API_URL="https://vision-api.schoolsai.work"
+VISION_CLIENT_TOKEN="tok_...client"
+VISION_ADMIN_TOKEN="tok_...admin"
+DEFAULT_TENANT="t_demo"
+ADMIN_EMAILS="ban@example.com"
+
+# chỉ cho local dev (wrangler pages dev) — bỏ qua Cloudflare Access:
+ALLOW_INSECURE="1"
+DEV_EMAIL="ban@example.com"

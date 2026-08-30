@@ -150,6 +150,21 @@ sinh trắc học (yêu cầu pháp lý ở nhiều nơi).
 
 ---
 
+## 5b. `GET /internal/api-tokens`  *(tùy chọn — nếu muốn quản token động)*
+
+Cho `vision-api` xác thực client bằng token lưu ở backend thay vì chỉ env tĩnh.
+Bật phía vision-api: `VISION_TOKENS_FROM_BACKEND=true` (refresh mỗi `VISION_TOKENS_REFRESH_SEC`, mặc định 60s).
+
+```json
+{ "tokens": {
+    "tok_ab12...": { "tenant": "t_acme", "role": "client" },
+    "tok_root...": { "tenant": "*",       "role": "admin"  }
+} }
+```
+vision-api **merge** map này với `VISION_API_TOKENS` (env). Rotate/revoke ở backend → có hiệu lực sau ≤ refresh interval.
+
+---
+
 ## 6. `GET /internal/events?tenant_id=&limit=`  *(tùy chọn, để debug)*
 
 vision-api không gọi. `mock-backend` có sẵn để kiểm tra.

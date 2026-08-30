@@ -1,0 +1,17 @@
+{
+  "name": "vision-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dashboard quản lý vision-api + backend /internal/* (Cloudflare Pages Functions + Neon)",
+  "scripts": {
+    "dev": "wrangler pages dev public --compatibility-date=2024-11-01",
+    "deploy": "wrangler pages deploy public",
+    "db:init": "psql \"$DATABASE_URL\" -f schema.sql"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}

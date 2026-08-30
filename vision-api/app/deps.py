@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import Depends, Header, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from . import config
+from . import config, tokens
 
 bearer_scheme = HTTPBearer(
     auto_error=False,
@@ -34,7 +34,7 @@ async def auth_ctx(
         raise HTTPException(401, "Thiếu header 'Authorization: Bearer <token>'")
     token = creds.credentials
 
-    meta = config.API_TOKENS.get(token)
+    meta = tokens.lookup(token)
     if not meta:
         raise HTTPException(401, "Token không hợp lệ")
 

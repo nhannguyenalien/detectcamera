@@ -1,0 +1,17 @@
+name = "vision-dashboard"
+pages_build_output_dir = "public"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Set các biến này ở Cloudflare Pages → Settings → Environment variables
+# (KHÔNG commit giá trị thật vào đây):
+#   DATABASE_URL        = postgres://...neon.tech/db?sslmode=require   (pooled connection string)
+#   INTERNAL_KEY        = <shared secret, khớp VISION_BACKEND_INTERNAL_KEY của vision-api>
+#   VISION_API_URL      = https://vision-api.schoolsai.work
+#   VISION_CLIENT_TOKEN = tok_..._client
+#   VISION_ADMIN_TOKEN  = tok_..._admin
+#   DEFAULT_TENANT      = t_demo
+#
+# Auth dashboard: bảo vệ project bằng Cloudflare Access (Zero Trust → Access → Applications),
+# self-hosted app trỏ tới *.pages.dev hoặc domain custom, path = / (chừa /internal/* ra —
+# xem functions/internal/_middleware.js). Function đọc header Cf-Access-Authenticated-User-Email.

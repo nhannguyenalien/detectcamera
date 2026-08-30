@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
-from . import config, metrics, net, schemas
+from . import config, metrics, net, schemas, tokens
 from .backend import BackendClient
 from .deps import Auth, RateLimiter, auth_ctx, require_tenant
 from .engine import FaceEngine
@@ -91,6 +91,7 @@ COMMON_ERRORS = {
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     loop = asyncio.get_event_loop()
+    _refresher = None
     try:
         if face_engine:
             STATE["detail"] = "loading face model"
@@ -116,6 +117,14 @@ async def lifespan(_: FastAPI):
                 except Exception as e:  # noqa: BLE001 - vẫn ready, lazy-load sau
                     STATE["detail"] = f"{mod} prefetch failed, lazy later: {e}"
 
+        if config.TOKENS_FROM_BACKEND:
+            try:
+                n = await tokens.refresh_once(backend)
+                print(f"[boot] loaded {n} dynamic tokens từ backend")
+            except Exception as e:  # noqa: BLE001
+                print(f"[boot] token fetch failed (dùng env tạm): {e}")
+            _refresher = asyncio.create_task(tokens.refresher(backend))
+
         STATE["ready"] = True
         if "fail" not in STATE["detail"]:
             STATE["detail"] = "ready"
@@ -128,6 +137,8 @@ async def lifespan(_: FastAPI):
         print(f"[boot] FAILED: {e}")
         raise
     yield
+    if _refresher:
+        _refresher.cancel()
     await backend.close()
 
 

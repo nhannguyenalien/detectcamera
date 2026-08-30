@@ -30,6 +30,11 @@ class BackendClient:
         r.raise_for_status()
         return r.json()
 
+    async def get_api_tokens(self) -> dict:
+        r = await self._c.get("/internal/api-tokens")
+        r.raise_for_status()
+        return r.json()
+
     async def post_event(self, tenant_id: str, kind: str, payload: dict) -> None:
         try:
             await self._c.post(

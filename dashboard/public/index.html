@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vision Dashboard</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css" />
+<style>
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .token-box { word-break: break-all; }
+  pre.out { background:#1a2234; color:#d6e0f5; padding:.75rem; border-radius:6px; max-height:340px; overflow:auto; font-size:12px }
+  .thumb { width:44px;height:44px;object-fit:cover;border-radius:6px;background:#eee }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="navbar navbar-expand-md navbar-light d-print-none">
+    <div class="container-xl">
+      <h1 class="navbar-brand pe-3 mb-0">🔎 Vision Dashboard</h1>
+      <div class="navbar-nav flex-row order-md-last align-items-center gap-2">
+        <select id="tenantSel" class="form-select form-select-sm" style="width:auto"></select>
+        <span id="whoami" class="text-secondary small"></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="navbar-expand-md">
+    <div class="navbar navbar-light">
+      <div class="container-xl">
+        <ul class="navbar-nav" id="tabs">
+          <li class="nav-item"><a class="nav-link active" data-tab="system" href="#">Hệ thống</a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="products" href="#">Sản phẩm</a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="search" href="#">Test nhận diện</a></li>
+          <li class="nav-item" data-admin><a class="nav-link" data-tab="clients" href="#">Clients</a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="portal" href="#">Token &amp; Usage</a></li>
+          <li class="nav-item" data-admin><a class="nav-link" data-tab="events" href="#">Events</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-body"><div class="container-xl">
+    <div id="alert"></div>
+
+    <!-- SYSTEM -->
+    <section data-panel="system">
+      <div class="row row-cards">
+        <div class="col-md-8">
+          <div class="card"><div class="card-header"><h3 class="card-title">vision-api</h3>
+            <div class="card-actions"><button class="btn btn-sm" id="btnHealth">Làm mới</button>
+              <button class="btn btn-sm btn-primary ms-2" data-admin id="btnReload">Reload index (tenant)</button></div></div>
+            <div class="card-body"><pre class="out" id="healthOut">…</pre></div>
+          </div>
+        </div>
+        <div class="col-md-4"><div class="card"><div class="card-body">
+          <div class="text-secondary">Kiến trúc</div>
+          <p class="mt-2 small">Dashboard = backend <span class="mono">/internal/*</span> cho vision-api + UI quản trị.
+          DB Neon (pgvector). Ảnh chỉ để embed rồi bỏ (không lưu).</p>
+        </div></div></div>
+      </div>
+    </section>
+
+    <!-- PRODUCTS -->
+    <section data-panel="products" hidden>
+      <div class="card">
+        <div class="card-header">
+          <input id="pq" class="form-control form-control-sm" placeholder="Tìm theo tên / SKU" style="max-width:280px">
+          <div class="card-actions"><button class="btn btn-sm btn-primary" id="btnAddProd">+ Thêm sản phẩm</button></div>
+        </div>
+        <div class="table-responsive"><table class="table table-vcenter card-table">
+          <thead><tr><th>SKU</th><th>Tên</th><th>Ảnh (emb)</th><th>Tạo lúc</th><th></th></tr></thead>
+          <tbody id="prodRows"></tbody></table></div>
+        <div class="card-footer d-flex align-items-center">
+          <span class="text-secondary" id="prodCount"></span>
+          <div class="ms-auto btn-group"><button class="btn btn-sm" id="pPrev">‹</button><button class="btn btn-sm" id="pNext">›</button></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SEARCH -->
+    <section data-panel="search" hidden>
+      <div class="row row-cards"><div class="col-md-5"><div class="card"><div class="card-body">
+        <label class="form-label">Ảnh sản phẩm cần nhận diện</label>
+        <input type="file" id="sImg" accept="image/*" class="form-control">
+        <label class="form-label mt-3">threshold (để trống = mặc định 0.55)</label>
+        <input id="sThr" class="form-control" placeholder="0.55">
+        <button class="btn btn-primary mt-3 w-100" id="btnSearch">Nhận diện</button>
+      </div></div></div>
+      <div class="col-md-7"><div class="card"><div class="card-body"><pre class="out" id="searchOut">…</pre></div></div></div>
+      </div>
+    </section>
+
+    <!-- CLIENTS -->
+    <section data-panel="clients" hidden data-admin>
+      <div class="card"><div class="card-header"><h3 class="card-title">Clients (tenants)</h3>
+        <div class="card-actions"><button class="btn btn-sm btn-primary" id="btnAddTenant">+ Thêm client</button></div></div>
+        <div class="table-responsive"><table class="table table-vcenter card-table">
+          <thead><tr><th>ID</th><th>Tên</th><th>Email</th><th>Sản phẩm</th><th>Search 30d</th></tr></thead>
+          <tbody id="tenantRows"></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- PORTAL -->
+    <section data-panel="portal" hidden>
+      <div id="portalWrap"></div>
+    </section>
+
+    <!-- EVENTS -->
+    <section data-panel="events" hidden data-admin>
+      <div class="card"><div class="card-body"><pre class="out" id="eventsOut">…</pre></div></div>
+    </section>
+  </div></div>
+</div>
+
+<!-- modal thêm sản phẩm -->
+<div class="modal" id="mProd" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title">Thêm sản phẩm</h5>
+    <button class="btn-close" data-close></button></div>
+  <div class="modal-body">
+    <label class="form-label">Tên *</label><input id="npName" class="form-control">
+    <label class="form-label mt-2">SKU</label><input id="npSku" class="form-control">
+    <label class="form-label mt-2">Meta (JSON)</label><input id="npMeta" class="form-control mono" placeholder='{"gia":1200000,"chat_lieu":"vàng 18k"}'>
+    <label class="form-label mt-2">Ảnh (1–12, càng nhiều góc càng chính xác) *</label>
+    <input type="file" id="npImgs" multiple accept="image/*" class="form-control">
+  </div>
+  <div class="modal-footer"><button class="btn" data-close>Huỷ</button>
+    <button class="btn btn-primary" id="npSave">Lưu &amp; enroll</button></div>
+</div></div></div>
+
+<!-- modal thêm client -->
+<div class="modal" id="mTenant" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title">Thêm client</h5><button class="btn-close" data-close></button></div>
+  <div class="modal-body">
+    <label class="form-label">ID (chữ/số/_/-) *</label><input id="ntId" class="form-control mono" placeholder="t_acme">
+    <label class="form-label mt-2">Tên *</label><input id="ntName" class="form-control">
+    <label class="form-label mt-2">Email chủ (để họ tự login xem token)</label><input id="ntEmail" class="form-control">
+  </div>
+  <div class="modal-footer"><button class="btn" data-close>Huỷ</button>
+    <button class="btn btn-primary" id="ntSave">Tạo</button></div>
+</div></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta21/dist/js/tabler.min.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

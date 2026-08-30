@@ -41,6 +41,11 @@ URL_ALLOWLIST = [d.strip().lower() for d in os.getenv("VISION_URL_ALLOWLIST", ""
 
 METRICS_ENABLED = os.getenv("VISION_METRICS_ENABLED", "true").lower() == "true"
 
+# Token động: ngoài VISION_API_TOKENS (env tĩnh), có thể lấy thêm từ backend
+# (GET /internal/api-tokens) — cho dashboard tự quản token/rotate. Merge cả 2.
+TOKENS_FROM_BACKEND = os.getenv("VISION_TOKENS_FROM_BACKEND", "false").lower() == "true"
+TOKENS_REFRESH_SEC = int(os.getenv("VISION_TOKENS_REFRESH_SEC", "60"))
+
 # VISION_API_TOKENS = JSON: {"<token>": {"tenant": "t_demo" | "*", "role": "client" | "admin"}}
 _raw = os.getenv("VISION_API_TOKENS", "").strip()
 if _raw:
