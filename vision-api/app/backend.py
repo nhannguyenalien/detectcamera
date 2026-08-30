@@ -25,6 +25,11 @@ class BackendClient:
         r.raise_for_status()
         return r.json()
 
+    async def get_product_embeddings(self, tenant_id: str) -> dict:
+        r = await self._c.get(f"/internal/tenants/{tenant_id}/product-embeddings")
+        r.raise_for_status()
+        return r.json()
+
     async def post_event(self, tenant_id: str, kind: str, payload: dict) -> None:
         try:
             await self._c.post(

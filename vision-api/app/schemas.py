@@ -84,12 +84,15 @@ class HealthResponse(BaseModel):
 
 class ReadyResponse(BaseModel):
     ready: bool = Field(..., description="true = model + FAISS sẵn sàng nhận request.")
-    detail: str = Field(..., examples=["ready", "loading model", "sync embeddings"])
-    provider: Optional[str] = Field(None, examples=["CUDAExecutionProvider"])
-    model: str = Field(..., examples=["buffalo_l"])
-    indexed: dict = Field(
-        ..., description="Thống kê index theo tenant.",
-        examples=[{"t_demo": {"persons": 12, "vectors": 34}}],
+    detail: str = Field(..., examples=["ready", "loading product model", "sync embeddings"])
+    modalities: dict = Field(
+        ..., description="Trạng thái từng modality (face / product): enabled, provider, model, indexed.",
+        examples=[{
+            "face": {"enabled": True, "provider": "CUDAExecutionProvider", "model": "buffalo_l",
+                     "indexed": {"t_demo": {"persons": 12, "vectors": 34}}},
+            "product": {"enabled": True, "provider": "CUDAExecutionProvider", "model": "dinov2-small",
+                        "indexed": {"t_demo": {"persons": 40, "vectors": 40}}},
+        }],
     )
 
 
@@ -105,8 +108,14 @@ class GpuResponse(BaseModel):
 
 
 class ReloadResponse(BaseModel):
-    reloaded: list[str] = Field(..., examples=[["t_demo"]])
-    stats: dict = Field(..., examples=[{"t_demo": {"persons": 2, "vectors": 2}}])
+    reloaded: dict = Field(
+        ..., description="{modality: [tenant_id, ...]}",
+        examples=[{"face": ["t_demo"], "product": ["t_demo"]}],
+    )
+    stats: dict = Field(
+        ..., examples=[{"face": {"t_demo": {"persons": 2, "vectors": 2}},
+                        "product": {"t_demo": {"persons": 40, "vectors": 40}}}],
+    )
 
 
 class StatsResponse(BaseModel):
@@ -117,12 +126,51 @@ class ErrorResponse(BaseModel):
     detail: str = Field(..., examples=["Token không hợp lệ"])
 
 
+# ---- product (visual search, 1 ảnh = 1 sp) ----
+
+class ProductEmbedResponse(BaseModel):
+    request_id: str
+    tenant_id: str
+    model: str = Field(..., examples=["dinov2-small"])
+    dim: int = Field(384, examples=[384])
+    embedding: list[float] = Field(
+        ..., description="Vector 384-d đã L2-norm. Gửi vào backend khi enroll sản phẩm.",
+        min_length=384, max_length=384,
+        examples=[[0.021, -0.044, 0.011, "...(381 số nữa)"]],
+    )
+    inference_ms: float
+
+
+class ProductCandidate(BaseModel):
+    product_id: str = Field(..., examples=["p_9f2c1a"])
+    name: Optional[str] = Field(None, examples=["Coca 330ml lon"])
+    score: float = Field(..., description="Cosine similarity (0..1).", examples=[0.87])
+
+
+class ProductIndexInfo(BaseModel):
+    products: int = Field(..., examples=[40])
+    vectors: int = Field(..., examples=[40])
+
+
+class ProductSearchResponse(BaseModel):
+    request_id: str
+    tenant_id: str
+    match: Optional[ProductCandidate] = Field(
+        None, description="Candidate top-1 nếu score >= threshold, ngược lại null."
+    )
+    candidates: list[ProductCandidate]
+    threshold: float = Field(..., examples=[0.55])
+    inference_ms: float
+    index: ProductIndexInfo
+
+
 class RootManifest(BaseModel):
     """Bản mô tả gọn cho AI agent / client tự khám phá."""
 
     service: str
     version: str
     ready_url: str
+    modalities: dict
     docs: dict
     auth: dict
     endpoints: list[dict]

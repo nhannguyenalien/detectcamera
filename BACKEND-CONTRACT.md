@@ -98,6 +98,40 @@ Sau khi xoá gọi `/admin/reload`.
 
 ---
 
+## 4b. Product visual search (modality `product`, 1 ảnh = 1 sp)
+
+Song song với face — cùng shape, chỉ khác: **dim 384** (DINOv2-S), key `product_id`, có thêm `sku`,
+**không có bbox** (embed cả ảnh). vision-api gọi khi `VISION_ENABLE_PRODUCTS=true`.
+
+### `GET /internal/tenants/{tid}/product-embeddings`
+```json
+{
+  "tenant_id": "t_acme",
+  "dim": 384,
+  "model": "dinov2-small",
+  "products": [
+    { "product_id": "p_001", "sku": "SKU-COCA-330", "name": "Coca 330ml lon",
+      "embeddings": [ [ /* 384 số, L2-normed */ ], [ /* ảnh thứ 2 của cùng sp */ ] ] }
+  ]
+}
+```
+- Nhiều ảnh / 1 sp → search lấy max cosine. `embeddings` rỗng → sp bị bỏ qua.
+- **404** nếu tenant không tồn tại.
+
+### `POST /internal/tenants/{tid}/products`
+```json
+{ "name": "Coca 330ml lon", "sku": "SKU-COCA-330",
+  "embeddings": [ [ /* 384 số */ ] ], "product_id": "p_001" }
+```
+→ **201** `{ "product_id": "p_001", "name": "...", "sku": "...", "embedding_count": 2 }`
+
+### `DELETE /internal/tenants/{tid}/products/{pid}`
+→ **200** `{ "deleted": 1 }`
+
+Sau enroll/xoá gọi `POST {vision-api}/admin/reload?modality=product&tenant_id={tid}`.
+
+---
+
 ## 5. `POST /internal/events`
 
 vision-api ghi audit mỗi lần `search` (best-effort, fire-and-forget — backend chậm/lỗi

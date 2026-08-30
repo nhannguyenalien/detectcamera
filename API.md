@@ -99,15 +99,35 @@ Mỗi mặt: `match` = candidate top-1 **nếu** `score >= threshold`, ngược 
   ] }
 ```
 
-### `POST /admin/reload` — rebuild FAISS (admin)
-Query: `tenant_id` (bỏ trống = tất cả tenant).
+### `POST /v1/products/embed` — trích embedding sản phẩm (client)
+Form: `file` | `url`. **1 ảnh = 1 sp** (embed cả ảnh, không detect). Vector 384-d đã L2-norm.
 ```json
-{ "reloaded": ["t_demo"], "stats": { "t_demo": { "persons": 2, "vectors": 2 } } }
+{ "request_id": "req_…", "tenant_id": "t_demo", "model": "dinov2-small", "dim": 384,
+  "embedding": [0.021, -0.044, /* …382 số */ ], "inference_ms": 18.7 }
 ```
 
-### `GET /v1/index/stats` — thống kê index (client / admin)
+### `POST /v1/products/search` — nhận diện sản phẩm (client)
+Form: `file` | `url`. Query: `top_k` (mặc định `5`), `threshold` (mặc định `0.55` — **calibrate trên catalog thật**).
 ```json
-{ "stats": { "t_demo": { "persons": 2, "vectors": 2 } } }
+{ "request_id": "req_…", "tenant_id": "t_demo",
+  "match": { "product_id": "p_9f2c1a", "name": "Coca 330ml lon", "score": 0.87 },
+  "candidates": [ { "product_id": "p_9f2c1a", "name": "Coca 330ml lon", "score": 0.87 } ],
+  "threshold": 0.55, "inference_ms": 19.2, "index": { "products": 40, "vectors": 40 } }
+```
+`match=null` khi candidate top-1 < threshold.
+
+### `POST /admin/reload` — rebuild FAISS (admin)
+Query: `modality` (`face` | `product` | `all`, mặc định `all`), `tenant_id` (bỏ trống = tất cả).
+```json
+{ "reloaded": { "face": ["t_demo"], "product": ["t_demo"] },
+  "stats": { "face": { "t_demo": { "persons": 2, "vectors": 2 } },
+             "product": { "t_demo": { "persons": 40, "vectors": 40 } } } }
+```
+
+### `GET /v1/index/stats` (face) · `GET /v1/products/index/stats` (product) — client/admin
+```json
+{ "stats": { "t_demo": { "persons": 2, "vectors": 2 } } }      // face
+{ "stats": { "t_demo": { "products": 40, "vectors": 40 } } }   // product
 ```
 
 ### `GET /` — manifest cho agent (no auth)

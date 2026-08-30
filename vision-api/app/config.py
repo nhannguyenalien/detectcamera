@@ -2,15 +2,27 @@
 import json
 import os
 
-EMB_DIM = 512
+EMB_DIM = 512  # face (ArcFace)
 
+# ---- FACE (InsightFace SCRFD + ArcFace) ----
+ENABLE_FACE = os.getenv("VISION_ENABLE_FACE", "true").lower() == "true"
 INSIGHTFACE_MODEL = os.getenv("INSIGHTFACE_MODEL", "buffalo_l")
 MODEL_ROOT = os.getenv("MODEL_ROOT", "/data/models/insightface")
 DET_SIZE = int(os.getenv("DET_SIZE", "640"))
 DET_THRESH = float(os.getenv("DET_THRESH", "0.5"))
-
 MATCH_THRESHOLD = float(os.getenv("MATCH_THRESHOLD", "0.40"))
 TOP_K = int(os.getenv("TOP_K", "5"))
+
+# ---- PRODUCT visual search (DINOv2-S) — 1 ảnh = 1 sản phẩm ----
+ENABLE_PRODUCTS = os.getenv("VISION_ENABLE_PRODUCTS", "true").lower() == "true"
+PRODUCT_EMB_DIM = 384
+PRODUCT_MODEL = os.getenv("PRODUCT_MODEL", "dinov2-small")
+PRODUCT_MODEL_PATH = os.getenv("PRODUCT_MODEL_PATH", "/opt/models/dinov2/model.onnx")
+PRODUCT_INPUT_SIZE = int(os.getenv("PRODUCT_INPUT_SIZE", "224"))
+# cosine giữa 2 ảnh CÙNG sản phẩm với DINOv2 thường ~0.6–0.9; khác sp ~<0.4.
+# 0.55 là điểm khởi đầu — PHẢI calibrate trên catalog thật.
+PRODUCT_MATCH_THRESHOLD = float(os.getenv("PRODUCT_MATCH_THRESHOLD", "0.55"))
+PRODUCT_TOP_K = int(os.getenv("PRODUCT_TOP_K", "5"))
 
 BACKEND_URL = os.getenv("VISION_BACKEND_URL", "http://mock-backend:9000")
 BACKEND_INTERNAL_KEY = os.getenv("VISION_BACKEND_INTERNAL_KEY", "dev-internal-key")

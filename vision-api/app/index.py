@@ -52,8 +52,22 @@ class TenantIndex:
 
 
 class IndexStore:
-    def __init__(self, backend) -> None:
+    """Generic per-tenant FAISS store. Dùng cho cả face lẫn product — chỉ khác
+    hàm fetch ở backend + tên field id trong payload."""
+
+    def __init__(
+        self,
+        backend,
+        fetch_attr: str = "get_face_embeddings",
+        items_key: str = "persons",
+        id_key: str = "person_id",
+        default_dim: int = config.EMB_DIM,
+    ) -> None:
         self.backend = backend
+        self._fetch_attr = fetch_attr
+        self._items_key = items_key
+        self._id_key = id_key
+        self._default_dim = default_dim
         self.tenants: dict[str, TenantIndex] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._glock = asyncio.Lock()
@@ -63,12 +77,12 @@ class IndexStore:
             return self._locks.setdefault(tid, asyncio.Lock())
 
     async def _build(self, tid: str) -> TenantIndex:
-        data = await self.backend.get_face_embeddings(tid)
-        idx = TenantIndex(dim=int(data.get("dim", config.EMB_DIM)))
-        for p in data.get("persons", []):
-            embs = p.get("embeddings") or []
+        data = await getattr(self.backend, self._fetch_attr)(tid)
+        idx = TenantIndex(dim=int(data.get("dim", self._default_dim)))
+        for it in data.get(self._items_key, []):
+            embs = it.get("embeddings") or []
             if embs:
-                idx.add_person(p["person_id"], p.get("name"), embs)
+                idx.add_person(it[self._id_key], it.get("name"), embs)
         return idx
 
     async def ensure(self, tid: str) -> TenantIndex:

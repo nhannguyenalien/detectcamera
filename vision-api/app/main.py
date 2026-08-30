@@ -1,11 +1,12 @@
 """
-vision-api — face detection + recognition (multi-tenant) trên GPU.
+vision-api — nhận dạng bằng ảnh trên GPU, multi-tenant, FAISS in-RAM.
 
-Boot sequence (gate /ready):
-  load model (SCRFD+ArcFace)  ->  warmup GPU  ->  sync embeddings từ backend
-  ->  build FAISS index / tenant  ->  ready=true
+2 modality (bật/tắt qua env):
+  - face   : InsightFace SCRFD + ArcFace  (nhiều mặt / ảnh)
+  - product: DINOv2-S visual search       (1 ảnh = 1 sản phẩm)
 
-Auth mọi endpoint /v1/* và /admin/*:  Authorization: Bearer <token>  + (X-Tenant-ID)
+Boot (gate /ready): load model(s) -> warmup GPU -> sync embeddings -> build FAISS -> ready.
+Auth mọi /v1/* và /admin/*:  Authorization: Bearer <token>  + (X-Tenant-ID).
 """
 import asyncio
 import subprocess
@@ -21,58 +22,68 @@ from .backend import BackendClient
 from .deps import Auth, RateLimiter, auth_ctx, require_tenant
 from .engine import FaceEngine
 from .index import IndexStore
+from .products import ProductEngine
 
 STATE = {"ready": False, "detail": "starting", "started_at": time.time()}
 
-engine = FaceEngine()
 backend = BackendClient()
-store = IndexStore(backend)
 gpu_sem = asyncio.Semaphore(config.GPU_CONCURRENCY)
 limiter = RateLimiter(config.RATE_LIMIT_PER_MIN)
 
+face_engine = FaceEngine() if config.ENABLE_FACE else None
+product_engine = ProductEngine() if config.ENABLE_PRODUCTS else None
+
+face_store = IndexStore(backend, "get_face_embeddings", "persons", "person_id", config.EMB_DIM)
+product_store = IndexStore(
+    backend, "get_product_embeddings", "products", "product_id", config.PRODUCT_EMB_DIM
+)
+
 DESCRIPTION = """\
-API nhận dạng **khuôn mặt** chạy trên GPU (InsightFace SCRFD + ArcFace) với **FAISS** index
-trong RAM, **multi-tenant**.
+API nhận dạng bằng ảnh trên GPU, **multi-tenant**, FAISS in-RAM.
+
+- **face** — InsightFace SCRFD + ArcFace. Nhiều mặt / ảnh.
+- **product** — DINOv2-S visual search. **1 ảnh = 1 sản phẩm**, so khớp với catalog của tenant.
 
 ### Xác thực
-Mọi endpoint `/v1/*` và `/admin/*` cần:
+Mọi `/v1/*` và `/admin/*`:
 
-| Header | Bắt buộc | Ghi chú |
+| Header | Bắt buộc | |
 |---|---|---|
-| `Authorization: Bearer <token>` | ✅ | token cấp cho 1 tenant, hoặc token global `*` |
-| `X-Tenant-ID: <tenant>` | khi token là global `*` | chọn tenant thao tác |
-| `X-Request-ID: <id>` | tùy chọn | echo lại trong response; tự sinh nếu thiếu |
+| `Authorization: Bearer <token>` | ✅ | token 1 tenant, hoặc global `*` |
+| `X-Tenant-ID` | khi token global | chọn tenant |
+| `X-Request-ID` | không | echo lại |
 
-Token `role=admin` mới gọi được `/admin/reload`.
-Rate limit theo tenant (HTTP 429 khi vượt).
+`role=admin` mới gọi `/admin/reload`. Rate limit theo tenant (429).
 
-### Luồng enroll 1 người
-1. `POST /v1/faces/embed` với ảnh chân dung → lấy `faces[i].embedding` (512-d).
-2. Gửi embedding sang backend (source of truth) — `POST {backend}/internal/tenants/{tid}/persons`.
-3. `POST /admin/reload?tenant_id={tid}` để nạp lại FAISS.
-4. `POST /v1/faces/search` → trả `person_id` + `score`.
+### Enroll (giống nhau cho cả 2)
+```
+POST /v1/{faces|products}/embed  (ảnh)  -> embedding
+POST {backend}/internal/tenants/{tid}/{persons|products}  {name, embeddings:[emb]}
+POST /admin/reload?modality={face|product}&tenant_id={tid}
+POST /v1/{faces|products}/search  -> match.{person_id|product_id} + score
+```
 
 ### Ảnh đầu vào
-`multipart/form-data`: field `file` (upload) **hoặc** field `url` (link ảnh http/https).
-URL bị chặn nếu trỏ vào IP nội bộ/loopback, và không theo redirect (chống SSRF).
-Giới hạn dung lượng `VISION_MAX_IMAGE_BYTES` (mặc định 20MB), số pixel `VISION_MAX_IMAGE_PIXELS`.
+`multipart/form-data`: `file` (upload) hoặc `url` (http/https, chặn IP nội bộ, không follow redirect lạ).
+Giới hạn `VISION_MAX_IMAGE_BYTES` (20MB), `VISION_MAX_IMAGE_PIXELS`.
 
-### Vận hành
-`GET /metrics` — Prometheus. `GET /health` liveness, `GET /ready` readiness.
+`GET /metrics` Prometheus · `GET /health` liveness · `GET /ready` readiness.
 """
 
 TAGS = [
-    {"name": "infra", "description": "Liveness / readiness / GPU / metrics. Không cần auth."},
-    {"name": "faces", "description": "Detect / embed / search khuôn mặt. Cần token client."},
-    {"name": "admin", "description": "Quản trị index. Cần token role=admin."},
-    {"name": "meta", "description": "Bản mô tả API cho client / AI agent tự khám phá."},
+    {"name": "infra", "description": "Liveness / readiness / GPU / metrics. Không auth."},
+    {"name": "faces", "description": "Detect / embed / search khuôn mặt."},
+    {"name": "products", "description": "Embed / search sản phẩm (1 ảnh = 1 sp)."},
+    {"name": "admin", "description": "Quản trị index. Token role=admin."},
+    {"name": "meta", "description": "Manifest cho client / AI agent."},
 ]
 
 COMMON_ERRORS = {
     400: {"model": schemas.ErrorResponse, "description": "Ảnh/URL không hợp lệ"},
     401: {"model": schemas.ErrorResponse, "description": "Thiếu / sai token"},
     403: {"model": schemas.ErrorResponse, "description": "Sai tenant hoặc thiếu quyền admin"},
-    429: {"model": schemas.ErrorResponse, "description": "Vượt rate limit của tenant"},
+    404: {"model": schemas.ErrorResponse, "description": "Modality bị tắt"},
+    429: {"model": schemas.ErrorResponse, "description": "Vượt rate limit"},
     503: {"model": schemas.ErrorResponse, "description": "Service chưa `ready`"},
 }
 
@@ -81,25 +92,35 @@ COMMON_ERRORS = {
 async def lifespan(_: FastAPI):
     loop = asyncio.get_event_loop()
     try:
-        STATE["detail"] = "loading model"
-        await loop.run_in_executor(None, engine.load)
-
-        STATE["detail"] = "warmup gpu"
-        await loop.run_in_executor(None, engine.warmup)
+        if face_engine:
+            STATE["detail"] = "loading face model"
+            await loop.run_in_executor(None, face_engine.load)
+            await loop.run_in_executor(None, face_engine.warmup)
+        if product_engine:
+            STATE["detail"] = "loading product model"
+            await loop.run_in_executor(None, product_engine.load)
+            await loop.run_in_executor(None, product_engine.warmup)
 
         if config.PREFETCH_ON_START:
             STATE["detail"] = "sync embeddings"
-            try:
-                tids = await store.reload_all()
-                STATE["detail"] = f"indexed tenants={tids}"
-            except Exception as e:  # noqa: BLE001 - vẫn ready, tenant sẽ lazy-load sau
-                STATE["detail"] = f"prefetch failed, lazy later: {e}"
+            for enabled, st, mod in (
+                (config.ENABLE_FACE, face_store, "face"),
+                (config.ENABLE_PRODUCTS, product_store, "product"),
+            ):
+                if not enabled:
+                    continue
+                try:
+                    tids = await st.reload_all()
+                    metrics.refresh_index_gauges(st.stats(), mod)
+                    STATE["detail"] = f"indexed {mod}={tids}"
+                except Exception as e:  # noqa: BLE001 - vẫn ready, lazy-load sau
+                    STATE["detail"] = f"{mod} prefetch failed, lazy later: {e}"
 
         STATE["ready"] = True
-        STATE["detail"] = STATE["detail"] if "fail" in STATE["detail"] else "ready"
+        if "fail" not in STATE["detail"]:
+            STATE["detail"] = "ready"
         metrics.READY.set(1)
-        metrics.refresh_index_gauges(store.stats())
-        print(f"[boot] READY provider={engine.provider} {STATE['detail']}")
+        print(f"[boot] READY face={bool(face_engine)} product={bool(product_engine)} {STATE['detail']}")
     except Exception as e:  # noqa: BLE001
         STATE["ready"] = False
         STATE["detail"] = f"startup error: {e}"
@@ -111,11 +132,11 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="vision-api (face)",
-    version="1.1.0",
+    title="vision-api",
+    version="1.2.0",
     description=DESCRIPTION,
     openapi_tags=TAGS,
-    contact={"name": "vision-stack", "url": "http://192.168.1.50:18090/docs"},
+    contact={"name": "vision-stack", "url": "/docs"},
     license_info={"name": "internal"},
     lifespan=lifespan,
 )
@@ -159,22 +180,46 @@ async def _read_image(file: Optional[UploadFile], url: Optional[str]) -> bytes:
     raise HTTPException(422, "Cần 'file' (multipart) hoặc 'url'")
 
 
-async def _analyze(raw: bytes, kind: str):
+async def _analyze_faces(raw: bytes, kind: str):
     loop = asyncio.get_event_loop()
     try:
-        bgr = await loop.run_in_executor(None, engine.decode, raw)
-    except Exception as e:  # noqa: BLE001 - ảnh hỏng / bomb
+        bgr = await loop.run_in_executor(None, face_engine.decode, raw)
+    except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"Ảnh không hợp lệ: {e}")
     async with gpu_sem:
-        faces, ms = await loop.run_in_executor(None, engine.analyze, bgr)
+        faces, ms = await loop.run_in_executor(None, face_engine.analyze, bgr)
     if config.METRICS_ENABLED:
         metrics.INFERENCE.labels(kind).observe(ms / 1000.0)
     return faces, ms
 
 
+async def _embed_product(raw: bytes, kind: str):
+    loop = asyncio.get_event_loop()
+    async with gpu_sem:
+        try:
+            vec, ms = await loop.run_in_executor(None, product_engine.embed, raw)
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"Ảnh không hợp lệ: {e}")
+    if config.METRICS_ENABLED:
+        metrics.INFERENCE.labels(kind).observe(ms / 1000.0)
+    return vec, ms
+
+
 def _guard_ready() -> None:
     if not STATE["ready"]:
         raise HTTPException(503, f"Service chưa sẵn sàng: {STATE['detail']}")
+
+
+def _guard_face() -> None:
+    if not config.ENABLE_FACE or face_engine is None:
+        raise HTTPException(404, "modality 'face' đang tắt (VISION_ENABLE_FACE=false)")
+
+
+def _guard_product() -> None:
+    if not config.ENABLE_PRODUCTS or product_engine is None:
+        raise HTTPException(404, "modality 'product' đang tắt (VISION_ENABLE_PRODUCTS=false)")
 
 
 async def _rate_check(auth: Auth) -> None:
@@ -190,13 +235,40 @@ async def _rate_check(auth: Auth) -> None:
 
 @app.get("/", tags=["meta"], response_model=schemas.RootManifest, summary="Manifest cho client/agent")
 async def root():
-    """Bản mô tả gọn: endpoint, cách auth, luồng enroll. Đọc cái này trước khi gọi API."""
+    """Đọc trước khi gọi API: endpoint, cách auth, luồng enroll."""
+    eps = [
+        {"method": "GET", "path": "/health", "auth": False, "desc": "liveness"},
+        {"method": "GET", "path": "/ready", "auth": False, "desc": "readiness + trạng thái index"},
+        {"method": "GET", "path": "/gpu", "auth": False, "desc": "provider ORT + VRAM"},
+        {"method": "GET", "path": "/metrics", "auth": False, "desc": "Prometheus"},
+        {"method": "POST", "path": "/admin/reload", "auth": "admin",
+         "desc": "rebuild FAISS", "query": {"modality": "face|product|all", "tenant_id": "optional"}},
+    ]
+    if config.ENABLE_FACE:
+        eps += [
+            {"method": "POST", "path": "/v1/faces/detect", "auth": "client", "body": "multipart file|url"},
+            {"method": "POST", "path": "/v1/faces/embed", "auth": "client", "body": "multipart file|url",
+             "desc": "ảnh -> embedding 512-d"},
+            {"method": "POST", "path": "/v1/faces/search", "auth": "client", "body": "multipart file|url",
+             "query": {"top_k": config.TOP_K, "threshold": config.MATCH_THRESHOLD},
+             "desc": "ảnh -> person_id + score"},
+            {"method": "GET", "path": "/v1/index/stats", "auth": "client|admin"},
+        ]
+    if config.ENABLE_PRODUCTS:
+        eps += [
+            {"method": "POST", "path": "/v1/products/embed", "auth": "client", "body": "multipart file|url",
+             "desc": f"1 ảnh -> embedding {config.PRODUCT_EMB_DIM}-d"},
+            {"method": "POST", "path": "/v1/products/search", "auth": "client", "body": "multipart file|url",
+             "query": {"top_k": config.PRODUCT_TOP_K, "threshold": config.PRODUCT_MATCH_THRESHOLD},
+             "desc": "1 ảnh -> product_id + score"},
+            {"method": "GET", "path": "/v1/products/index/stats", "auth": "client|admin"},
+        ]
     return {
-        "service": "vision-api (face)",
+        "service": "vision-api",
         "version": app.version,
         "ready_url": "/ready",
-        "docs": {"swagger": "/docs", "redoc": "/redoc", "openapi": "/openapi.json",
-                 "metrics": "/metrics"},
+        "modalities": {"face": config.ENABLE_FACE, "product": config.ENABLE_PRODUCTS},
+        "docs": {"swagger": "/docs", "redoc": "/redoc", "openapi": "/openapi.json", "metrics": "/metrics"},
         "auth": {
             "scheme": "Authorization: Bearer <token>",
             "tenant_header": "X-Tenant-ID (bắt buộc nếu token global '*')",
@@ -204,56 +276,52 @@ async def root():
             "admin_only": ["/admin/reload"],
             "rate_limit": f"{config.RATE_LIMIT_PER_MIN}/phút/tenant",
         },
-        "endpoints": [
-            {"method": "GET", "path": "/health", "auth": False, "desc": "liveness"},
-            {"method": "GET", "path": "/ready", "auth": False, "desc": "readiness + trạng thái index"},
-            {"method": "GET", "path": "/gpu", "auth": False, "desc": "provider ORT + VRAM"},
-            {"method": "GET", "path": "/metrics", "auth": False, "desc": "Prometheus"},
-            {"method": "POST", "path": "/v1/faces/detect", "auth": "client",
-             "desc": "ảnh -> bbox + det_score", "body": "multipart file|url"},
-            {"method": "POST", "path": "/v1/faces/embed", "auth": "client",
-             "desc": "ảnh -> embedding 512-d để enroll", "body": "multipart file|url"},
-            {"method": "POST", "path": "/v1/faces/search", "auth": "client",
-             "desc": "ảnh -> person_id + score", "body": "multipart file|url",
-             "query": {"top_k": config.TOP_K, "threshold": config.MATCH_THRESHOLD}},
-            {"method": "POST", "path": "/admin/reload", "auth": "admin",
-             "desc": "rebuild FAISS", "query": {"tenant_id": "optional; rỗng = tất cả"}},
-            {"method": "GET", "path": "/v1/index/stats", "auth": "client|admin",
-             "desc": "số person/vector đã index"},
-        ],
+        "endpoints": eps,
         "enroll_flow": [
-            "POST /v1/faces/embed  (ảnh chân dung)  -> faces[i].embedding",
-            "POST {backend}/internal/tenants/{tid}/persons  {name, embeddings:[embedding]}",
-            "POST /admin/reload?tenant_id={tid}",
-            "POST /v1/faces/search  -> match.person_id",
+            "POST /v1/{faces|products}/embed  (ảnh)  -> embedding",
+            "POST {backend}/internal/tenants/{tid}/{persons|products}  {name, embeddings:[emb]}",
+            "POST /admin/reload?modality={face|product}&tenant_id={tid}",
+            "POST /v1/{faces|products}/search  -> match id + score",
         ],
         "notes": [
-            "embedding đã L2-normalize; score = cosine similarity (0..1).",
-            "match=null nghĩa là không có candidate nào >= threshold.",
-            "gọi /ready tới khi ready=true trước khi bắn traffic thật.",
-            f"model hiện tại: {config.INSIGHTFACE_MODEL}, dim={config.EMB_DIM}.",
+            "embedding đã L2-normalize; score = cosine (0..1).",
+            "match=null = không candidate nào >= threshold.",
+            "poll /ready tới ready=true trước khi bắn traffic.",
+            f"face: {config.INSIGHTFACE_MODEL} dim={config.EMB_DIM}. "
+            f"product: {config.PRODUCT_MODEL} dim={config.PRODUCT_EMB_DIM}, 1 ảnh = 1 sp.",
         ],
     }
 
 
-# ------------------------------- infra endpoints --------------------------- #
+# ------------------------------- infra ----------------------------------- #
 
 @app.get("/health", tags=["infra"], response_model=schemas.HealthResponse,
-         summary="Liveness — process còn sống")
+         summary="Liveness")
 async def health():
     return {"status": "ok", "uptime_s": round(time.time() - STATE["started_at"], 1)}
 
 
 @app.get("/ready", tags=["infra"], response_model=schemas.ReadyResponse,
-         summary="Readiness — model + FAISS đã sẵn sàng",
+         summary="Readiness — model + FAISS sẵn sàng",
          responses={503: {"model": schemas.ReadyResponse, "description": "Đang khởi động"}})
 async def ready():
     body = {
         "ready": STATE["ready"],
         "detail": STATE["detail"],
-        "provider": engine.provider,
-        "model": config.INSIGHTFACE_MODEL,
-        "indexed": store.stats(),
+        "modalities": {
+            "face": {
+                "enabled": config.ENABLE_FACE,
+                "provider": face_engine.provider if face_engine else None,
+                "model": config.INSIGHTFACE_MODEL,
+                "indexed": face_store.stats(),
+            },
+            "product": {
+                "enabled": config.ENABLE_PRODUCTS,
+                "provider": product_engine.provider if product_engine else None,
+                "model": config.PRODUCT_MODEL,
+                "indexed": product_store.stats(),
+            },
+        },
     }
     return JSONResponse(body, status_code=200 if STATE["ready"] else 503)
 
@@ -263,25 +331,18 @@ async def ready():
 async def gpu():
     import onnxruntime as ort
 
-    info = {"provider": engine.provider, "onnxruntime_providers": ort.get_available_providers()}
+    prov = (face_engine.provider if face_engine else None) or (
+        product_engine.provider if product_engine else None
+    )
+    info = {"provider": prov, "onnxruntime_providers": ort.get_available_providers()}
     try:
         out = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=name,memory.total,memory.used,utilization.gpu",
-                "--format=csv,noheader,nounits",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=5,
+            ["nvidia-smi", "--query-gpu=name,memory.total,memory.used,utilization.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
         ).stdout.strip()
         name, mt, mu, ut = (x.strip() for x in out.split(","))
-        info |= {
-            "name": name,
-            "vram_total_mb": int(mt),
-            "vram_used_mb": int(mu),
-            "gpu_util_pct": int(ut),
-        }
+        info |= {"name": name, "vram_total_mb": int(mt), "vram_used_mb": int(mu), "gpu_util_pct": int(ut)}
     except Exception as e:  # noqa: BLE001
         info["nvidia_smi"] = f"n/a: {e}"
     return info
@@ -292,179 +353,210 @@ async def prometheus_metrics():
     if not config.METRICS_ENABLED:
         raise HTTPException(404, "metrics disabled")
     metrics.refresh_gpu_gauges()
-    metrics.refresh_index_gauges(store.stats())
+    if config.ENABLE_FACE:
+        metrics.refresh_index_gauges(face_store.stats(), "face")
+    if config.ENABLE_PRODUCTS:
+        metrics.refresh_index_gauges(product_store.stats(), "product")
     body, ctype = metrics.render()
     return Response(content=body, media_type=ctype)
 
 
-# ------------------------------- face endpoints ---------------------------- #
+# ------------------------------- faces ----------------------------------- #
 
-@app.post(
-    "/v1/faces/detect",
-    tags=["faces"],
-    response_model=schemas.DetectResponse,
-    responses=COMMON_ERRORS,
-    summary="Phát hiện khuôn mặt (bbox, không nhận dạng)",
-)
+@app.post("/v1/faces/detect", tags=["faces"], response_model=schemas.DetectResponse,
+          responses=COMMON_ERRORS, summary="Phát hiện khuôn mặt (bbox)")
 async def faces_detect(
     auth: Auth = Depends(auth_ctx),
-    file: Optional[UploadFile] = File(None, description="Ảnh upload (jpg/png/…)"),
-    url: Optional[str] = Form(None, description="Hoặc URL ảnh http/https"),
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None, description="URL ảnh http/https"),
 ):
-    _guard_ready()
-    require_tenant(auth)
+    _guard_ready(); _guard_face(); require_tenant(auth)
     await _rate_check(auth)
-    faces, ms = await _analyze(await _read_image(file, url), "detect")
+    faces, ms = await _analyze_faces(await _read_image(file, url), "face_detect")
     if config.METRICS_ENABLED:
-        metrics.FACES_DETECTED.labels(auth.tenant).inc(len(faces))
+        metrics.OBJECTS_DETECTED.labels(auth.tenant, "face").inc(len(faces))
     return {
-        "request_id": auth.request_id,
-        "tenant_id": auth.tenant,
-        "count": len(faces),
+        "request_id": auth.request_id, "tenant_id": auth.tenant, "count": len(faces),
         "faces": [{"bbox_xyxy": f["bbox_xyxy"], "det_score": f["det_score"]} for f in faces],
         "inference_ms": ms,
     }
 
 
-@app.post(
-    "/v1/faces/embed",
-    tags=["faces"],
-    response_model=schemas.EmbedResponse,
-    responses=COMMON_ERRORS,
-    summary="Trích embedding 512-d cho mỗi khuôn mặt (để enroll)",
-)
+@app.post("/v1/faces/embed", tags=["faces"], response_model=schemas.EmbedResponse,
+          responses=COMMON_ERRORS, summary="Embedding 512-d / mặt (để enroll)")
 async def faces_embed(
     auth: Auth = Depends(auth_ctx),
-    file: Optional[UploadFile] = File(None, description="Ảnh chân dung (1 mặt là tốt nhất)"),
-    url: Optional[str] = Form(None, description="Hoặc URL ảnh http/https"),
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None, description="URL ảnh http/https"),
 ):
-    """Kết quả `faces[i].embedding` (512 số, đã L2-norm) là dữ liệu gửi vào backend khi enroll."""
-    _guard_ready()
-    require_tenant(auth)
+    _guard_ready(); _guard_face(); require_tenant(auth)
     await _rate_check(auth)
-    faces, ms = await _analyze(await _read_image(file, url), "embed")
+    faces, ms = await _analyze_faces(await _read_image(file, url), "face_embed")
     if config.METRICS_ENABLED:
-        metrics.FACES_DETECTED.labels(auth.tenant).inc(len(faces))
+        metrics.OBJECTS_DETECTED.labels(auth.tenant, "face").inc(len(faces))
     return {
-        "request_id": auth.request_id,
-        "tenant_id": auth.tenant,
-        "model": config.INSIGHTFACE_MODEL,
-        "dim": config.EMB_DIM,
-        "count": len(faces),
+        "request_id": auth.request_id, "tenant_id": auth.tenant,
+        "model": config.INSIGHTFACE_MODEL, "dim": config.EMB_DIM, "count": len(faces),
         "faces": [
-            {
-                "bbox_xyxy": f["bbox_xyxy"],
-                "det_score": f["det_score"],
-                "embedding": [round(float(x), 6) for x in f["embedding"].tolist()],
-            }
+            {"bbox_xyxy": f["bbox_xyxy"], "det_score": f["det_score"],
+             "embedding": [round(float(x), 6) for x in f["embedding"].tolist()]}
             for f in faces
         ],
         "inference_ms": ms,
     }
 
 
-@app.post(
-    "/v1/faces/search",
-    tags=["faces"],
-    response_model=schemas.SearchResponse,
-    responses=COMMON_ERRORS,
-    summary="Nhận dạng — mỗi khuôn mặt → person_id + score",
-)
+@app.post("/v1/faces/search", tags=["faces"], response_model=schemas.SearchResponse,
+          responses=COMMON_ERRORS, summary="Nhận dạng mặt → person_id + score")
 async def faces_search(
     auth: Auth = Depends(auth_ctx),
-    file: Optional[UploadFile] = File(None, description="Ảnh cần nhận dạng"),
-    url: Optional[str] = Form(None, description="Hoặc URL ảnh http/https"),
-    top_k: int = Query(config.TOP_K, ge=1, le=50, description="Số candidate trả về / mặt"),
-    threshold: float = Query(
-        config.MATCH_THRESHOLD, ge=0.0, le=1.0,
-        description="Ngưỡng cosine để coi là 'match'. Thấp hơn = dễ match hơn (nhiều false positive).",
-    ),
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None, description="URL ảnh http/https"),
+    top_k: int = Query(config.TOP_K, ge=1, le=50),
+    threshold: float = Query(config.MATCH_THRESHOLD, ge=0.0, le=1.0),
 ):
-    _guard_ready()
-    require_tenant(auth)
+    _guard_ready(); _guard_face(); require_tenant(auth)
     await _rate_check(auth)
-    idx = await store.ensure(auth.tenant)
-    faces, ms = await _analyze(await _read_image(file, url), "search")
+    idx = await face_store.ensure(auth.tenant)
+    faces, ms = await _analyze_faces(await _read_image(file, url), "face_search")
 
-    results = []
-    n_match = 0
+    results, n_match = [], 0
     for f in faces:
         cands = idx.search(f["embedding"], top_k)
         match = cands[0] if cands and cands[0]["score"] >= threshold else None
         if match:
             n_match += 1
-        results.append(
-            {
-                "bbox_xyxy": f["bbox_xyxy"],
-                "det_score": f["det_score"],
-                "match": match,
-                "candidates": cands,
-            }
-        )
+        results.append({"bbox_xyxy": f["bbox_xyxy"], "det_score": f["det_score"],
+                        "match": match, "candidates": cands})
 
     if config.METRICS_ENABLED:
-        metrics.FACES_DETECTED.labels(auth.tenant).inc(len(results))
+        metrics.OBJECTS_DETECTED.labels(auth.tenant, "face").inc(len(results))
         if n_match:
-            metrics.MATCHES.labels(auth.tenant).inc(n_match)
-
+            metrics.MATCHES.labels(auth.tenant, "face").inc(n_match)
     if config.POST_EVENTS:
-        asyncio.create_task(
-            backend.post_event(
-                auth.tenant,
-                "face_search",
-                {
-                    "request_id": auth.request_id,
-                    "n_faces": len(results),
-                    "matches": [r["match"] for r in results if r["match"]],
-                },
-            )
-        )
+        asyncio.create_task(backend.post_event(auth.tenant, "face_search", {
+            "request_id": auth.request_id, "n_faces": len(results),
+            "matches": [r["match"] for r in results if r["match"]]}))
 
     return {
-        "request_id": auth.request_id,
-        "tenant_id": auth.tenant,
-        "count": len(results),
-        "faces": results,
-        "threshold": threshold,
-        "inference_ms": ms,
+        "request_id": auth.request_id, "tenant_id": auth.tenant, "count": len(results),
+        "faces": results, "threshold": threshold, "inference_ms": ms,
         "index": {"persons": idx.n_persons, "vectors": idx.n_vectors},
     }
 
 
-@app.post(
-    "/admin/reload",
-    tags=["admin"],
-    response_model=schemas.ReloadResponse,
-    responses=COMMON_ERRORS,
-    summary="Rebuild FAISS index từ backend",
-)
+@app.get("/v1/index/stats", tags=["faces"], response_model=schemas.StatsResponse,
+         responses=COMMON_ERRORS, summary="Số person / vector đã index (face)")
+async def index_stats(auth: Auth = Depends(auth_ctx)):
+    _guard_face()
+    if auth.role == "admin" and not auth.tenant:
+        return {"stats": face_store.stats()}
+    require_tenant(auth)
+    await face_store.ensure(auth.tenant)
+    return {"stats": face_store.stats(auth.tenant)}
+
+
+# ------------------------------- products -------------------------------- #
+
+@app.post("/v1/products/embed", tags=["products"], response_model=schemas.ProductEmbedResponse,
+          responses=COMMON_ERRORS, summary="1 ảnh → embedding sản phẩm (để enroll)")
+async def products_embed(
+    auth: Auth = Depends(auth_ctx),
+    file: Optional[UploadFile] = File(None, description="Ảnh 1 sản phẩm, cận cảnh"),
+    url: Optional[str] = Form(None, description="URL ảnh http/https"),
+):
+    """`embedding` (đã L2-norm) là dữ liệu gửi vào backend khi enroll sản phẩm."""
+    _guard_ready(); _guard_product(); require_tenant(auth)
+    await _rate_check(auth)
+    vec, ms = await _embed_product(await _read_image(file, url), "product_embed")
+    if config.METRICS_ENABLED:
+        metrics.OBJECTS_DETECTED.labels(auth.tenant, "product").inc(1)
+    return {
+        "request_id": auth.request_id, "tenant_id": auth.tenant,
+        "model": config.PRODUCT_MODEL, "dim": config.PRODUCT_EMB_DIM,
+        "embedding": [round(float(x), 6) for x in vec.tolist()],
+        "inference_ms": ms,
+    }
+
+
+@app.post("/v1/products/search", tags=["products"], response_model=schemas.ProductSearchResponse,
+          responses=COMMON_ERRORS, summary="1 ảnh → product_id + score")
+async def products_search(
+    auth: Auth = Depends(auth_ctx),
+    file: Optional[UploadFile] = File(None, description="Ảnh sản phẩm cần nhận diện"),
+    url: Optional[str] = Form(None, description="URL ảnh http/https"),
+    top_k: int = Query(config.PRODUCT_TOP_K, ge=1, le=50),
+    threshold: float = Query(config.PRODUCT_MATCH_THRESHOLD, ge=0.0, le=1.0,
+                             description="Ngưỡng cosine coi là match. Calibrate trên catalog thật."),
+):
+    _guard_ready(); _guard_product(); require_tenant(auth)
+    await _rate_check(auth)
+    idx = await product_store.ensure(auth.tenant)
+    vec, ms = await _embed_product(await _read_image(file, url), "product_search")
+
+    cands = [
+        {"product_id": c["person_id"], "name": c["name"], "score": c["score"]}
+        for c in idx.search(vec, top_k)
+    ]
+    match = cands[0] if cands and cands[0]["score"] >= threshold else None
+
+    if config.METRICS_ENABLED:
+        metrics.OBJECTS_DETECTED.labels(auth.tenant, "product").inc(1)
+        if match:
+            metrics.MATCHES.labels(auth.tenant, "product").inc(1)
+    if config.POST_EVENTS:
+        asyncio.create_task(backend.post_event(auth.tenant, "product_search", {
+            "request_id": auth.request_id, "match": match}))
+
+    return {
+        "request_id": auth.request_id, "tenant_id": auth.tenant,
+        "match": match, "candidates": cands, "threshold": threshold, "inference_ms": ms,
+        "index": {"products": idx.n_persons, "vectors": idx.n_vectors},
+    }
+
+
+@app.get("/v1/products/index/stats", tags=["products"], response_model=schemas.StatsResponse,
+         responses=COMMON_ERRORS, summary="Số product / vector đã index")
+async def products_index_stats(auth: Auth = Depends(auth_ctx)):
+    _guard_product()
+    if auth.role == "admin" and not auth.tenant:
+        return {"stats": _rename_products(product_store.stats())}
+    require_tenant(auth)
+    await product_store.ensure(auth.tenant)
+    return {"stats": _rename_products(product_store.stats(auth.tenant))}
+
+
+def _rename_products(stats: dict) -> dict:
+    return {t: {"products": s.get("persons", 0), "vectors": s.get("vectors", 0)} for t, s in stats.items()}
+
+
+# ------------------------------- admin --------------------------------- #
+
+@app.post("/admin/reload", tags=["admin"], response_model=schemas.ReloadResponse,
+          responses=COMMON_ERRORS, summary="Rebuild FAISS từ backend")
 async def admin_reload(
     auth: Auth = Depends(auth_ctx),
-    tenant_id: Optional[str] = Query(None, description="Bỏ trống = reload tất cả tenant"),
+    modality: str = Query("all", pattern="^(face|product|all)$"),
+    tenant_id: Optional[str] = Query(None, description="Bỏ trống = tất cả tenant"),
 ):
     if auth.role != "admin":
         raise HTTPException(403, "Cần token role=admin")
-    if tenant_id:
-        await store.reload(tenant_id)
-        out = {"reloaded": [tenant_id], "stats": store.stats(tenant_id)}
-    else:
-        tids = await store.reload_all()
-        out = {"reloaded": tids, "stats": store.stats()}
-    if config.METRICS_ENABLED:
-        metrics.refresh_index_gauges(store.stats())
+    targets = []
+    if modality in ("face", "all") and config.ENABLE_FACE:
+        targets.append((face_store, "face"))
+    if modality in ("product", "all") and config.ENABLE_PRODUCTS:
+        targets.append((product_store, "product"))
+
+    out: dict = {"reloaded": {}, "stats": {}}
+    for st, mod in targets:
+        if tenant_id:
+            await st.reload(tenant_id)
+            out["reloaded"][mod] = [tenant_id]
+            out["stats"][mod] = st.stats(tenant_id)
+        else:
+            tids = await st.reload_all()
+            out["reloaded"][mod] = tids
+            out["stats"][mod] = st.stats()
+        if config.METRICS_ENABLED:
+            metrics.refresh_index_gauges(st.stats(), mod)
     return out
-
-
-@app.get(
-    "/v1/index/stats",
-    tags=["faces"],
-    response_model=schemas.StatsResponse,
-    responses=COMMON_ERRORS,
-    summary="Số person / vector đã index",
-)
-async def index_stats(auth: Auth = Depends(auth_ctx)):
-    if auth.role == "admin" and not auth.tenant:
-        return {"stats": store.stats()}
-    require_tenant(auth)
-    await store.ensure(auth.tenant)
-    return {"stats": store.stats(auth.tenant)}

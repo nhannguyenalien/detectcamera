@@ -12,6 +12,7 @@ services:
       DB_PATH: /data/backend/backend.db
       INTERNAL_KEY: ${INTERNAL_KEY}
       EMB_DIM: "512"
+      PRODUCT_EMB_DIM: "384"
       SEED_TENANTS: ${SEED_TENANTS:-t_demo}
     volumes:
       - backend-data:/data/backend
@@ -23,11 +24,15 @@ services:
     depends_on:
       - mock-backend
     environment:
+      VISION_ENABLE_FACE: ${VISION_ENABLE_FACE:-true}
+      VISION_ENABLE_PRODUCTS: ${VISION_ENABLE_PRODUCTS:-true}
       INSIGHTFACE_MODEL: ${INSIGHTFACE_MODEL:-buffalo_l}
       MODEL_ROOT: /data/models/insightface
       DET_SIZE: ${DET_SIZE:-640}
       MATCH_THRESHOLD: ${MATCH_THRESHOLD:-0.40}
       TOP_K: ${TOP_K:-5}
+      PRODUCT_MATCH_THRESHOLD: ${PRODUCT_MATCH_THRESHOLD:-0.55}
+      PRODUCT_TOP_K: ${PRODUCT_TOP_K:-5}
       VISION_BACKEND_URL: http://mock-backend:9000
       VISION_BACKEND_INTERNAL_KEY: ${INTERNAL_KEY}
       VISION_API_TOKENS: ${VISION_API_TOKENS}

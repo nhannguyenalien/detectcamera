@@ -44,6 +44,14 @@ RUN mkdir -p /opt/models/insightface/models/buffalo_l \
  && rm /tmp/buffalo_l.zip \
  && ls -la /opt/models/insightface/models/buffalo_l
 
+# 5b) DINOv2-S ONNX cho product visual search (~88MB). Load thẳng từ /opt/models.
+RUN mkdir -p /opt/models/dinov2 \
+ && ( curl -fsSL -o /opt/models/dinov2/model.onnx \
+        https://huggingface.co/Xenova/dinov2-small/resolve/main/onnx/model.onnx \
+   || curl -fsSL -o /opt/models/dinov2/model.onnx \
+        https://huggingface.co/onnx-community/dinov2-small-ONNX/resolve/main/onnx/model.onnx ) \
+ && ls -la /opt/models/dinov2
+
 COPY app ./app
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

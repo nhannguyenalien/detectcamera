@@ -21,8 +21,10 @@ from pydantic import BaseModel, Field
 
 DB_PATH = os.getenv("DB_PATH", "/data/backend/backend.db")
 INTERNAL_KEY = os.getenv("INTERNAL_KEY", "dev-internal-key")
-EMB_DIM = int(os.getenv("EMB_DIM", "512"))
+EMB_DIM = int(os.getenv("EMB_DIM", "512"))                      # face
 EMB_MODEL = os.getenv("EMB_MODEL", "buffalo_l/arcface_r50")
+PRODUCT_EMB_DIM = int(os.getenv("PRODUCT_EMB_DIM", "384"))      # product (DINOv2-S)
+PRODUCT_EMB_MODEL = os.getenv("PRODUCT_EMB_MODEL", "dinov2-small")
 SEED_TENANTS = [t.strip() for t in os.getenv("SEED_TENANTS", "t_demo").split(",") if t.strip()]
 
 _lock = threading.Lock()
@@ -67,9 +69,25 @@ def _init_db() -> None:
             payload TEXT,
             created_at REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS products (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            sku TEXT,
+            name TEXT NOT NULL,
+            created_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS product_embeddings (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            vec BLOB NOT NULL,
+            created_at REAL NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS ix_persons_tenant ON persons(tenant_id);
         CREATE INDEX IF NOT EXISTS ix_emb_person ON embeddings(person_id);
         CREATE INDEX IF NOT EXISTS ix_events_tenant ON events(tenant_id);
+        CREATE INDEX IF NOT EXISTS ix_products_tenant ON products(tenant_id);
+        CREATE INDEX IF NOT EXISTS ix_pemb_product ON product_embeddings(product_id);
         """
     )
     now = time.time()
@@ -81,14 +99,14 @@ def _init_db() -> None:
     _conn.commit()
 
 
-def _pack(vec: List[float]) -> bytes:
-    if len(vec) != EMB_DIM:
-        raise HTTPException(422, f"embedding phải có {EMB_DIM} chiều, nhận {len(vec)}")
-    return struct.pack(f"<{EMB_DIM}f", *[float(x) for x in vec])
+def _pack(vec: List[float], dim: int) -> bytes:
+    if len(vec) != dim:
+        raise HTTPException(422, f"embedding phải có {dim} chiều, nhận {len(vec)}")
+    return struct.pack(f"<{dim}f", *[float(x) for x in vec])
 
 
-def _unpack(blob: bytes) -> List[float]:
-    return list(struct.unpack(f"<{EMB_DIM}f", blob))
+def _unpack(blob: bytes, dim: int) -> List[float]:
+    return list(struct.unpack(f"<{dim}f", blob))
 
 
 def require_internal(x_internal_key: str = Header(default="")) -> None:
@@ -134,7 +152,7 @@ def face_embeddings(tid: str = Path(...)) -> Dict[str, Any]:
             {
                 "person_id": pid,
                 "name": name,
-                "embeddings": [_unpack(e[0]) for e in erows],
+                "embeddings": [_unpack(e[0], EMB_DIM) for e in erows],
             }
         )
     return {"tenant_id": tid, "dim": EMB_DIM, "model": EMB_MODEL, "persons": persons}
@@ -171,7 +189,7 @@ def upsert_person(body: PersonIn, tid: str = Path(...)) -> Dict[str, Any]:
         for vec in body.embeddings:
             db().execute(
                 "INSERT INTO embeddings(id,person_id,tenant_id,vec,created_at) VALUES (?,?,?,?,?)",
-                (f"e_{uuid.uuid4().hex[:12]}", pid, tid, _pack(vec), now),
+                (f"e_{uuid.uuid4().hex[:12]}", pid, tid, _pack(vec, EMB_DIM), now),
             )
         db().commit()
         cnt = db().execute(
@@ -188,6 +206,90 @@ def delete_person(tid: str, pid: str) -> Dict[str, Any]:
     with _lock:
         db().execute("DELETE FROM embeddings WHERE person_id=? AND tenant_id=?", (pid, tid))
         cur = db().execute("DELETE FROM persons WHERE id=? AND tenant_id=?", (pid, tid))
+        db().commit()
+    return {"deleted": cur.rowcount}
+
+
+# ----------------------------- products (visual search) ---------------------- #
+
+@app.get(
+    "/internal/tenants/{tid}/product-embeddings",
+    dependencies=[Depends(require_internal)],
+)
+def product_embeddings(tid: str = Path(...)) -> Dict[str, Any]:
+    if not db().execute("SELECT 1 FROM tenants WHERE id=?", (tid,)).fetchone():
+        raise HTTPException(404, "tenant không tồn tại")
+    prows = db().execute(
+        "SELECT id,sku,name FROM products WHERE tenant_id=? ORDER BY created_at", (tid,)
+    ).fetchall()
+    products = []
+    for pid, sku, name in prows:
+        erows = db().execute(
+            "SELECT vec FROM product_embeddings WHERE product_id=? ORDER BY created_at", (pid,)
+        ).fetchall()
+        products.append(
+            {
+                "product_id": pid,
+                "sku": sku,
+                "name": name,
+                "embeddings": [_unpack(e[0], PRODUCT_EMB_DIM) for e in erows],
+            }
+        )
+    return {
+        "tenant_id": tid, "dim": PRODUCT_EMB_DIM, "model": PRODUCT_EMB_MODEL, "products": products
+    }
+
+
+class ProductIn(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+    embeddings: List[List[float]] = Field(min_length=1)
+    sku: Optional[str] = None
+    product_id: Optional[str] = None
+
+
+@app.post(
+    "/internal/tenants/{tid}/products",
+    dependencies=[Depends(require_internal)],
+    status_code=201,
+)
+def upsert_product(body: ProductIn, tid: str = Path(...)) -> Dict[str, Any]:
+    with _lock:
+        if not db().execute("SELECT 1 FROM tenants WHERE id=?", (tid,)).fetchone():
+            db().execute(
+                "INSERT INTO tenants(id,name,created_at) VALUES (?,?,?)", (tid, tid, time.time())
+            )
+        pid = body.product_id or f"p_{uuid.uuid4().hex[:12]}"
+        now = time.time()
+        if db().execute("SELECT 1 FROM products WHERE id=?", (pid,)).fetchone():
+            db().execute("UPDATE products SET name=?,sku=? WHERE id=?", (body.name, body.sku, pid))
+        else:
+            db().execute(
+                "INSERT INTO products(id,tenant_id,sku,name,created_at) VALUES (?,?,?,?,?)",
+                (pid, tid, body.sku, body.name, now),
+            )
+        for vec in body.embeddings:
+            db().execute(
+                "INSERT INTO product_embeddings(id,product_id,tenant_id,vec,created_at) "
+                "VALUES (?,?,?,?,?)",
+                (f"pe_{uuid.uuid4().hex[:12]}", pid, tid, _pack(vec, PRODUCT_EMB_DIM), now),
+            )
+        db().commit()
+        cnt = db().execute(
+            "SELECT COUNT(*) FROM product_embeddings WHERE product_id=?", (pid,)
+        ).fetchone()[0]
+    return {"product_id": pid, "name": body.name, "sku": body.sku, "embedding_count": cnt}
+
+
+@app.delete(
+    "/internal/tenants/{tid}/products/{pid}",
+    dependencies=[Depends(require_internal)],
+)
+def delete_product(tid: str, pid: str) -> Dict[str, Any]:
+    with _lock:
+        db().execute(
+            "DELETE FROM product_embeddings WHERE product_id=? AND tenant_id=?", (pid, tid)
+        )
+        cur = db().execute("DELETE FROM products WHERE id=? AND tenant_id=?", (pid, tid))
         db().commit()
     return {"deleted": cur.rowcount}
 

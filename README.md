@@ -1,4 +1,4 @@
-# vision-stack — GPU face recognition appliance
+# vision-stack — GPU visual recognition appliance (face + product)
 
 ```
 Proxmox promox
@@ -9,8 +9,11 @@ Proxmox promox
               └── mock-backend       (FastAPI + SQLite = source-of-truth giả lập) :18091 (localhost)
 ```
 
-- **vision-api** — GPU inference. Face detect / embed / search. FAISS index/tenant trong RAM,
-  sync từ backend lúc khởi động, rebuild qua `/admin/reload`.
+- **vision-api** — GPU inference, 2 modality dùng chung 1 service / 1 GPU worker:
+  - **face** — InsightFace SCRFD + ArcFace (nhiều mặt / ảnh), `/v1/faces/*`
+  - **product** — DINOv2-S visual search, **1 ảnh = 1 sản phẩm**, so với catalog tenant, `/v1/products/*`
+  FAISS index/tenant/modality trong RAM, sync từ backend lúc khởi động, rebuild qua `/admin/reload?modality=`.
+  Bật/tắt: `VISION_ENABLE_FACE`, `VISION_ENABLE_PRODUCTS`.
 - **mock-backend** — thay chỗ backend/DB thật. Giữ tenants / persons / embeddings / events.
   Khi có backend thật: trỏ `VISION_BACKEND_URL` sang đó, implement 4 endpoint `/internal/*`
   (xem `mock-backend/app/main.py`), bỏ container này.
@@ -22,8 +25,6 @@ vào cùng `vision-api` (đo VRAM rồi mới bật, GTX 1650 chỉ 4GB).
 > **Chưa production.** Xem [`GO-LIVE.md`](./GO-LIVE.md) (checklist blocker) và
 > [`BACKEND-CONTRACT.md`](./BACKEND-CONTRACT.md) (spec backend thật cần implement).
 > Đã có: SSRF guard cho `url=`, container non-root (uid 10001), model bake sẵn trong image,
->
-> **Ổ đĩa `/data` (500G HDD trên VM 103):** xem [`STORAGE.md`](./STORAGE.md) — dev/agent đọc trước khi để model/dataset/volume.
 > `GET /metrics` (Prometheus).
 
 ## Boot sequence (gate `/ready`)
