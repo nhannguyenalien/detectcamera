@@ -14,6 +14,17 @@ Cloudflare Pages
         └─ khi enroll: gọi vision-api /v1/products/embed → lưu vec → /admin/reload
 ```
 
+## Đăng nhập
+
+2 cách (dùng cách nào cũng được, có thể bật cả 2):
+
+1. **Email + password** (bảng `users`, session cookie ký bằng `SESSION_SECRET`).
+   Form login ngay trên `/`. Admin tạo user client ở tab **Clients** (điền mật khẩu) hoặc `POST /api/users`.
+2. **Cloudflare Access** — nếu bật, header `Cf-Access-Authenticated-User-Email` được chấp nhận luôn.
+   Nhớ **exclude `/internal/*`** khỏi Access (để vision-api gọi được).
+
+Role: email trong `ADMIN_EMAILS` (hoặc `users.role='admin'`) = admin; còn lại = client (chỉ tenant `owner_email` của mình).
+
 ## Vai trò
 
 | | admin (email trong `ADMIN_EMAILS`) | client (email = `tenants.owner_email`) |

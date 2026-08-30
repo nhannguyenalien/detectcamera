@@ -13,13 +13,29 @@
 </style>
 </head>
 <body>
-<div class="page">
+<!-- màn hình đăng nhập -->
+<div id="loginScreen" class="page page-center" hidden>
+  <div class="container container-tight py-4" style="max-width:380px">
+    <div class="card card-md"><div class="card-body">
+      <h2 class="h3 text-center mb-3">🔎 Vision Dashboard</h2>
+      <div id="loginErr" class="alert alert-danger py-2 small" hidden></div>
+      <label class="form-label">Email</label>
+      <input id="liEmail" type="email" class="form-control mb-2" autocomplete="username">
+      <label class="form-label">Mật khẩu</label>
+      <input id="liPass" type="password" class="form-control mb-3" autocomplete="current-password">
+      <button id="liBtn" class="btn btn-primary w-100">Đăng nhập</button>
+    </div></div>
+  </div>
+</div>
+
+<div class="page" id="appScreen" hidden>
   <header class="navbar navbar-expand-md navbar-light d-print-none">
     <div class="container-xl">
       <h1 class="navbar-brand pe-3 mb-0">🔎 Vision Dashboard</h1>
       <div class="navbar-nav flex-row order-md-last align-items-center gap-2">
         <select id="tenantSel" class="form-select form-select-sm" style="width:auto"></select>
         <span id="whoami" class="text-secondary small"></span>
+        <button id="btnLogout" class="btn btn-sm" hidden>Đăng xuất</button>
       </div>
     </div>
   </header>
@@ -133,7 +149,8 @@
   <div class="modal-body">
     <label class="form-label">ID (chữ/số/_/-) *</label><input id="ntId" class="form-control mono" placeholder="t_acme">
     <label class="form-label mt-2">Tên *</label><input id="ntName" class="form-control">
-    <label class="form-label mt-2">Email chủ (để họ tự login xem token)</label><input id="ntEmail" class="form-control">
+    <label class="form-label mt-2">Email chủ (để client tự login xem token)</label><input id="ntEmail" type="email" class="form-control">
+    <label class="form-label mt-2">Mật khẩu cho client (≥8 ký tự, để trống = không tạo login)</label><input id="ntPass" class="form-control">
   </div>
   <div class="modal-footer"><button class="btn" data-close>Huỷ</button>
     <button class="btn btn-primary" id="ntSave">Tạo</button></div>

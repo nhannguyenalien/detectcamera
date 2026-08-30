@@ -11,6 +11,8 @@ compatibility_flags = ["nodejs_compat"]
 #   VISION_CLIENT_TOKEN = tok_..._client
 #   VISION_ADMIN_TOKEN  = tok_..._admin
 #   DEFAULT_TENANT      = t_demo
+#   SESSION_SECRET      = <32B random>   (ký cookie đăng nhập email/password)
+#   ADMIN_EMAILS        = email1,email2  (role admin nếu login = 1 trong các email này)
 #
 # Auth dashboard: bảo vệ project bằng Cloudflare Access (Zero Trust → Access → Applications),
 # self-hosted app trỏ tới *.pages.dev hoặc domain custom, path = / (chừa /internal/* ra —

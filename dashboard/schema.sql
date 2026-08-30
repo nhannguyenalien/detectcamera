@@ -10,6 +10,16 @@ CREATE TABLE IF NOT EXISTS tenants (
 );
 CREATE INDEX IF NOT EXISTS ix_tenants_email ON tenants (lower(owner_email));
 
+-- user đăng nhập dashboard bằng email + password (thay Cloudflare Access)
+CREATE TABLE IF NOT EXISTS users (
+  email         TEXT PRIMARY KEY,
+  password_hash TEXT NOT NULL,          -- pbkdf2$iter$saltB64$hashB64
+  role          TEXT NOT NULL DEFAULT 'client',   -- 'admin' | 'client'
+  tenant_id     TEXT REFERENCES tenants(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_login_at TIMESTAMPTZ
+);
+
 -- token API vision-api sẽ đọc qua GET /internal/api-tokens
 CREATE TABLE IF NOT EXISTS api_tokens (
   token        TEXT PRIMARY KEY,          -- 'tok_' + 40 hex

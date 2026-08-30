@@ -20,14 +20,37 @@ function flash(msg, kind = "danger") {
 }
 const modal = (id, show) => bootstrap.Modal.getOrCreateInstance($("#" + id))[show ? "show" : "hide"]();
 
+// ---------- login ----------
+function showLogin(msg) {
+  $("#appScreen").hidden = true;
+  $("#loginScreen").hidden = false;
+  if (msg) { $("#loginErr").hidden = false; $("#loginErr").textContent = msg; }
+}
+async function doLogin() {
+  $("#loginErr").hidden = true;
+  const email = $("#liEmail").value.trim(), password = $("#liPass").value;
+  if (!email || !password) return showLogin("Nhập email và mật khẩu");
+  try {
+    const r = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password }) });
+    const d = await r.json();
+    if (!r.ok) return showLogin(d.error || "Đăng nhập lỗi");
+    location.reload();
+  } catch (e) { showLogin(String(e)); }
+}
+$("#liBtn").onclick = doLogin;
+$("#liPass").addEventListener("keydown", (e) => e.key === "Enter" && doLogin());
+
 // ---------- boot ----------
 (async function boot() {
   try {
     ME = await api("/me");
   } catch (e) {
-    document.body.innerHTML = `<div class="container py-6"><div class="alert alert-danger">Chưa đăng nhập hoặc lỗi: ${esc(e.message)}</div></div>`;
-    return;
+    return showLogin(/Chưa đăng nhập/.test(e.message) ? null : e.message);
   }
+  $("#loginScreen").hidden = true;
+  $("#appScreen").hidden = false;
+  $("#btnLogout").hidden = false;
+  $("#btnLogout").onclick = async () => { await fetch("/api/logout"); location.reload(); };
   $("#whoami").textContent = `${ME.email} · ${ME.role}`;
   if (ME.role !== "admin") $$("[data-admin]").forEach((el) => (el.hidden = true));
 
@@ -160,12 +183,14 @@ function wire() {
     finally { $("#npSave").disabled = false; }
   };
 
-  $("#btnAddTenant") && ($("#btnAddTenant").onclick = () => { ["ntId", "ntName", "ntEmail"].forEach((i) => ($("#" + i).value = "")); modal("mTenant", true); });
+  $("#btnAddTenant") && ($("#btnAddTenant").onclick = () => { ["ntId", "ntName", "ntEmail", "ntPass"].forEach((i) => ($("#" + i).value = "")); modal("mTenant", true); });
   $("#ntSave") && ($("#ntSave").onclick = async () => {
     try {
-      await api("/tenants", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: $("#ntId").value.trim(), name: $("#ntName").value.trim(), owner_email: $("#ntEmail").value.trim() }) });
-      modal("mTenant", false); flash("Đã tạo client", "success"); boot2();
+      const r = await api("/tenants", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: $("#ntId").value.trim(), name: $("#ntName").value.trim(), owner_email: $("#ntEmail").value.trim(), password: $("#ntPass").value }) });
+      modal("mTenant", false);
+      flash("Đã tạo client" + (r.login ? ` · login: ${r.login}` : ""), "success");
+      boot2();
     } catch (e) { flash(e.message); }
   });
 

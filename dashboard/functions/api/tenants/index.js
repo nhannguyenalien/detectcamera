@@ -1,4 +1,5 @@
 import { sql, json, err, genId, myTenants } from "../../_lib.js";
+import { hashPassword } from "../../_auth.js";
 
 // GET /api/tenants  -> danh sách tenant (admin: tất cả; client: của mình) kèm số sp + usage 30 ngày
 export async function onRequestGet({ env, data }) {
@@ -29,5 +30,16 @@ export async function onRequestPost({ env, request, data }) {
   await sql(env)`
     INSERT INTO tenants (id, name, owner_email) VALUES (${id}, ${b.name}, ${b.owner_email || null})
     ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, owner_email=EXCLUDED.owner_email`;
-  return json({ id, name: b.name, owner_email: b.owner_email || null }, 201);
+
+  // tạo luôn user login cho client nếu có owner_email + password
+  let login = null;
+  if (b.owner_email && b.password && String(b.password).length >= 8) {
+    const hash = await hashPassword(String(b.password));
+    await sql(env)`
+      INSERT INTO users (email, password_hash, role, tenant_id)
+      VALUES (${b.owner_email.toLowerCase()}, ${hash}, 'client', ${id})
+      ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash, role='client', tenant_id=${id}`;
+    login = b.owner_email.toLowerCase();
+  }
+  return json({ id, name: b.name, owner_email: b.owner_email || null, login }, 201);
 }
