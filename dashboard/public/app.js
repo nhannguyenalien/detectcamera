@@ -77,17 +77,36 @@ function curTab() { return $("#tabs .nav-link.active")?.dataset.tab; }
 function refreshTab(tab = curTab()) {
   if (tab === "system") loadHealth();
   if (tab === "products") { prodPage = 1; loadProducts(); }
-  if (tab === "search") $("#searchOut").textContent = "…";
+  if (tab === "search") $("#searchResult").innerHTML = `<div class="text-secondary">Chọn ảnh rồi bấm Nhận diện.</div>`;
   if (tab === "clients") loadTenants();
   if (tab === "portal") loadPortal();
   if (tab === "events") loadEvents();
 }
 
 // ---------- system ----------
+function statCard(title, value, sub) {
+  return `<div class="col-6 col-md-3"><div class="card card-sm"><div class="card-body">
+    <div class="text-secondary">${esc(title)}</div>
+    <div class="h2 m-0">${esc(value)}</div>
+    <div class="text-secondary small">${esc(sub || "")}</div></div></div></div>`;
+}
 async function loadHealth() {
   $("#healthOut").textContent = "…";
-  try { $("#healthOut").textContent = JSON.stringify(await api("/health"), null, 2); }
-  catch (e) { $("#healthOut").textContent = "lỗi: " + e.message; }
+  $("#statCards").innerHTML = "";
+  try {
+    const d = await api("/health");
+    const r = d.ready || {}, g = d.gpu || {};
+    const face = r.modalities?.face || {}, prod = r.modalities?.product || {};
+    $("#statCards").innerHTML =
+      statCard("vision-api", r.ready ? "✅ ready" : "⏳ " + (r.detail || "?"), d.vision_api_url) +
+      statCard("GPU", g.name || "—", g.vram_used_mb != null ? `${g.vram_used_mb} / ${g.vram_total_mb} MB` : "") +
+      statCard("Face model", face.enabled ? face.model : "tắt", face.provider || "") +
+      statCard("Product model", prod.enabled ? prod.model : "tắt", prod.provider || "");
+    $("#healthOut").textContent = JSON.stringify(d, null, 2);
+  } catch (e) {
+    $("#statCards").innerHTML = statCard("Lỗi", "—", e.message);
+    $("#healthOut").textContent = "lỗi: " + e.message;
+  }
 }
 
 // ---------- products ----------
@@ -104,7 +123,9 @@ async function loadProducts() {
       <td>${p.n_emb}</td>
       <td class="text-secondary">${new Date(p.created_at).toLocaleString()}</td>
       <td><button class="btn btn-sm btn-ghost-danger" data-del="${esc(p.id)}">Xoá</button></td>
-    </tr>`).join("") || `<tr><td colspan="5" class="text-secondary">chưa có sản phẩm</td></tr>`;
+    </tr>`).join("") ||
+    `<tr><td colspan="5" class="text-secondary py-4 text-center">Chưa có sản phẩm.
+      Bấm <b>+ Thêm sản phẩm</b> (upload ảnh) hoặc <b>Nhập hàng loạt</b> (theo URL).</td></tr>`;
   $$("#prodRows [data-del]").forEach((b) => (b.onclick = async () => {
     if (!confirm("Xoá sản phẩm này?")) return;
     await api("/products/" + b.dataset.del, { method: "DELETE" }).catch((e) => flash(e.message));
@@ -199,12 +220,44 @@ function wire() {
     if (!f) return flash("Chọn ảnh");
     const fd = new FormData(); fd.append("tenant", TENANT); fd.append("image", f);
     if ($("#sThr").value.trim()) fd.append("threshold", $("#sThr").value.trim());
-    $("#searchOut").textContent = "đang nhận diện…";
-    try { $("#searchOut").textContent = JSON.stringify(await api("/search", { method: "POST", body: fd }), null, 2); }
-    catch (e) { $("#searchOut").textContent = "lỗi: " + e.message; }
+    $("#searchResult").innerHTML = `<div class="text-secondary">đang nhận diện…</div>`;
+    try {
+      const d = await api("/search", { method: "POST", body: fd });
+      const row = (c, best) => `
+        <div class="card card-sm mb-2 ${best ? "border-primary" : ""}"><div class="card-body d-flex align-items-center">
+          <div class="flex-fill"><div class="fw-bold">${esc(c.name || c.product_id)}</div>
+            <div class="text-secondary small mono">${esc(c.sku || "")} · ${esc(c.product_id)}</div></div>
+          <div class="text-end"><span class="badge ${c.score >= d.threshold ? "bg-green" : "bg-secondary"}">${(c.score * 100).toFixed(1)}%</span></div>
+        </div></div>`;
+      $("#searchResult").innerHTML =
+        `<div class="mb-2">${d.match
+          ? `<span class="status status-green">Khớp: <b class="ms-1">${esc(d.match.name)}</b> · ${(d.match.score * 100).toFixed(1)}%</span>`
+          : `<span class="status status-secondary">Không khớp (ngưỡng ${d.threshold})</span>`}
+          <span class="text-secondary small ms-2">${d.inference_ms} ms · ${d.index?.products || 0} sp trong index</span></div>` +
+        (d.candidates || []).map((c) => row(c, d.match && c.product_id === d.match.product_id)).join("") ||
+        `<div class="text-secondary">Không có candidate nào.</div>`;
+    } catch (e) { $("#searchResult").innerHTML = `<div class="text-danger">lỗi: ${esc(e.message)}</div>`; }
   };
 
-  [...$$("[data-close]")].forEach((b) => (b.onclick = () => { modal("mProd", false); modal("mTenant", false); }));
+  $("#btnBulk") && ($("#btnBulk").onclick = () => { $("#bulkText").value = ""; $("#bulkOut").innerHTML = ""; modal("mBulk", true); });
+  $("#bulkRun") && ($("#bulkRun").onclick = async () => {
+    const items = $("#bulkText").value.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+      const [name, sku, urls] = l.split("|").map((x) => (x || "").trim());
+      return { name, sku: sku || null, image_urls: (urls || "").split(",").map((u) => u.trim()).filter(Boolean) };
+    }).filter((it) => it.name && it.image_urls.length);
+    if (!items.length) return flash("Không có dòng hợp lệ (cần: Tên | SKU | url)");
+    $("#bulkOut").innerHTML = `đang xử lý ${items.length} sản phẩm…`;
+    $("#bulkRun").disabled = true;
+    try {
+      const r = await api("/products/bulk", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: TENANT, items }) });
+      $("#bulkOut").innerHTML = `<b>Thêm ${r.added}</b>, lỗi ${r.failed}.<br>` +
+        r.results.map((x) => `${x.ok ? "✅" : "❌"} ${esc(x.name)} ${x.ok ? `(${x.embeddings} ảnh)` : "— " + esc(x.error)}`).join("<br>");
+      loadProducts();
+    } catch (e) { $("#bulkOut").innerHTML = `<span class="text-danger">${esc(e.message)}</span>`; }
+    finally { $("#bulkRun").disabled = false; }
+  });
+
+  [...$$("[data-close]")].forEach((b) => (b.onclick = () => { modal("mProd", false); modal("mTenant", false); modal("mBulk", false); }));
   document.querySelectorAll(".btn-close[data-bs-dismiss]").length; // tabler handles
 }
 async function boot2() {

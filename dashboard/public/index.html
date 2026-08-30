@@ -60,19 +60,13 @@
 
     <!-- SYSTEM -->
     <section data-panel="system">
-      <div class="row row-cards">
-        <div class="col-md-8">
-          <div class="card"><div class="card-header"><h3 class="card-title">vision-api</h3>
-            <div class="card-actions"><button class="btn btn-sm" id="btnHealth">Làm mới</button>
-              <button class="btn btn-sm btn-primary ms-2" data-admin id="btnReload">Reload index (tenant)</button></div></div>
-            <div class="card-body"><pre class="out" id="healthOut">…</pre></div>
-          </div>
-        </div>
-        <div class="col-md-4"><div class="card"><div class="card-body">
-          <div class="text-secondary">Kiến trúc</div>
-          <p class="mt-2 small">Dashboard = backend <span class="mono">/internal/*</span> cho vision-api + UI quản trị.
-          DB Neon (pgvector). Ảnh chỉ để embed rồi bỏ (không lưu).</p>
-        </div></div></div>
+      <div class="row row-cards" id="statCards"></div>
+      <div class="card mt-3"><div class="card-header"><h3 class="card-title">vision-api chi tiết</h3>
+        <div class="card-actions">
+          <button class="btn btn-sm" id="btnHealth">Làm mới</button>
+          <button class="btn btn-sm btn-primary ms-2" data-admin id="btnReload">Reload index (tenant hiện tại)</button>
+        </div></div>
+        <div class="card-body"><pre class="out" id="healthOut">…</pre></div>
       </div>
     </section>
 
@@ -80,8 +74,11 @@
     <section data-panel="products" hidden>
       <div class="card">
         <div class="card-header">
-          <input id="pq" class="form-control form-control-sm" placeholder="Tìm theo tên / SKU" style="max-width:280px">
-          <div class="card-actions"><button class="btn btn-sm btn-primary" id="btnAddProd">+ Thêm sản phẩm</button></div>
+          <input id="pq" class="form-control form-control-sm" placeholder="Tìm theo tên / SKU" style="max-width:260px">
+          <div class="card-actions">
+            <button class="btn btn-sm" id="btnBulk">Nhập hàng loạt</button>
+            <button class="btn btn-sm btn-primary ms-2" id="btnAddProd">+ Thêm sản phẩm</button>
+          </div>
         </div>
         <div class="table-responsive"><table class="table table-vcenter card-table">
           <thead><tr><th>SKU</th><th>Tên</th><th>Ảnh (emb)</th><th>Tạo lúc</th><th></th></tr></thead>
@@ -102,7 +99,7 @@
         <input id="sThr" class="form-control" placeholder="0.55">
         <button class="btn btn-primary mt-3 w-100" id="btnSearch">Nhận diện</button>
       </div></div></div>
-      <div class="col-md-7"><div class="card"><div class="card-body"><pre class="out" id="searchOut">…</pre></div></div></div>
+      <div class="col-md-7"><div id="searchResult" class="text-secondary">Chọn ảnh rồi bấm Nhận diện.</div></div>
       </div>
     </section>
 
@@ -141,6 +138,20 @@
   </div>
   <div class="modal-footer"><button class="btn" data-close>Huỷ</button>
     <button class="btn btn-primary" id="npSave">Lưu &amp; enroll</button></div>
+</div></div></div>
+
+<!-- modal nhập hàng loạt -->
+<div class="modal" id="mBulk" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title">Nhập hàng loạt (theo URL ảnh)</h5><button class="btn-close" data-close></button></div>
+  <div class="modal-body">
+    <p class="text-secondary small">Mỗi dòng 1 sản phẩm: <span class="mono">Tên | SKU | url1 , url2 , url3</span>
+      (SKU và các URL sau URL đầu có thể bỏ). Ảnh được embed qua vision-api rồi bỏ.</p>
+    <textarea id="bulkText" class="form-control mono" rows="10" placeholder="Nhẫn kim cương 0.5ct | NHAN-001 | https://.../a.jpg , https://.../a2.jpg
+Dây chuyền vàng | DC-002 | https://.../b.jpg"></textarea>
+    <div id="bulkOut" class="mt-2 small"></div>
+  </div>
+  <div class="modal-footer"><button class="btn" data-close>Đóng</button>
+    <button class="btn btn-primary" id="bulkRun">Chạy</button></div>
 </div></div></div>
 
 <!-- modal thêm client -->

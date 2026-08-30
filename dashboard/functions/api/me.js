@@ -1,13 +1,18 @@
-import { sql, json, myTenants } from "../_lib.js";
+import { sql, json, myTenants, newToken } from "../_lib.js";
 
 // GET /api/me -> { email, role, tenants:[{id,name, token, usage}] }  (1 call cho portal client)
 export async function onRequestGet({ env, data }) {
   const ts = await myTenants(env, data);
   const out = [];
   for (const t of ts) {
-    const tok = await sql(env)`
+    let tok = await sql(env)`
       SELECT token, last_used_at, created_at FROM api_tokens
       WHERE tenant_id=${t.id} AND role='client' AND NOT revoked ORDER BY created_at DESC LIMIT 1`;
+    if (!tok.length) {
+      const nt = newToken();
+      await sql(env)`INSERT INTO api_tokens (token, tenant_id, role, label) VALUES (${nt}, ${t.id}, 'client', 'auto')`;
+      tok = [{ token: nt }];
+    }
     const [u] = await sql(env)`
       SELECT
         count(*) FILTER (WHERE created_at > now() - interval '1 day')::int  AS searches_1d,
