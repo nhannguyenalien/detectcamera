@@ -5,7 +5,7 @@ const b64u = (s) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$
 const unb64u = (s) => atob(s.replace(/-/g, "+").replace(/_/g, "/"));
 const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
-const ITER = 120000;
+const ITER = 100000; // Cloudflare Workers PBKDF2 cap
 
 export async function hashPassword(pw) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
