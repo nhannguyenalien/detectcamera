@@ -46,6 +46,7 @@
         <ul class="navbar-nav" id="tabs">
           <li class="nav-item"><a class="nav-link active" data-tab="system" href="#">Hệ thống</a></li>
           <li class="nav-item"><a class="nav-link" data-tab="products" href="#">Sản phẩm</a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="persons" href="#">Người</a></li>
           <li class="nav-item"><a class="nav-link" data-tab="search" href="#">Test nhận diện</a></li>
           <li class="nav-item" data-admin><a class="nav-link" data-tab="clients" href="#">Clients</a></li>
           <li class="nav-item"><a class="nav-link" data-tab="portal" href="#">Token &amp; Usage</a></li>
@@ -90,13 +91,35 @@
       </div>
     </section>
 
+    <!-- PERSONS -->
+    <section data-panel="persons" hidden>
+      <div class="card">
+        <div class="card-header">
+          <input id="pxq" class="form-control form-control-sm" placeholder="Tìm theo tên" style="max-width:260px">
+          <div class="card-actions"><button class="btn btn-sm btn-primary" id="btnAddPerson">+ Thêm người</button></div>
+        </div>
+        <div class="table-responsive"><table class="table table-vcenter card-table">
+          <thead><tr><th>Tên</th><th>Face emb</th><th>Body emb</th><th>Tạo lúc</th><th></th></tr></thead>
+          <tbody id="personRows"></tbody></table></div>
+        <div class="card-footer d-flex align-items-center">
+          <span class="text-secondary" id="personCount"></span>
+          <div class="ms-auto btn-group"><button class="btn btn-sm" id="pxPrev">‹</button><button class="btn btn-sm" id="pxNext">›</button></div>
+        </div>
+      </div>
+    </section>
+
     <!-- SEARCH -->
     <section data-panel="search" hidden>
       <div class="row row-cards"><div class="col-md-5"><div class="card"><div class="card-body">
-        <label class="form-label">Ảnh sản phẩm cần nhận diện</label>
+        <label class="form-label">Kiểu</label>
+        <select id="sMode" class="form-select mb-2">
+          <option value="product">Sản phẩm — /v1/products/search</option>
+          <option value="person">Người — fusion face+body — /v1/persons/identify</option>
+        </select>
+        <label class="form-label">Ảnh cần nhận diện</label>
         <input type="file" id="sImg" accept="image/*" class="form-control">
-        <label class="form-label mt-3">threshold (để trống = mặc định 0.55)</label>
-        <input id="sThr" class="form-control" placeholder="0.55">
+        <label class="form-label mt-3">threshold (trống = mặc định)</label>
+        <input id="sThr" class="form-control" placeholder="product 0.55 · person face 0.40">
         <button class="btn btn-primary mt-3 w-100" id="btnSearch">Nhận diện</button>
       </div></div></div>
       <div class="col-md-7"><div id="searchResult" class="text-secondary">Chọn ảnh rồi bấm Nhận diện.</div></div>
@@ -138,6 +161,20 @@
   </div>
   <div class="modal-footer"><button class="btn" data-close>Huỷ</button>
     <button class="btn btn-primary" id="npSave">Lưu &amp; enroll</button></div>
+</div></div></div>
+
+<!-- modal thêm người -->
+<div class="modal" id="mPerson" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title">Thêm người</h5><button class="btn-close" data-close></button></div>
+  <div class="modal-body">
+    <label class="form-label">Tên *</label><input id="nxName" class="form-control">
+    <label class="form-label mt-2">Meta (JSON)</label><input id="nxMeta" class="form-control mono" placeholder='{"phong_ban":"KV1"}'>
+    <label class="form-label mt-2">Ảnh (1–12) — <b>toàn thân, thấy rõ mặt</b> *</label>
+    <input type="file" id="nxImgs" multiple accept="image/*" class="form-control">
+    <div class="form-hint">Mỗi ảnh: embed mặt to nhất (512-d) + embed toàn thân (256-d). Ảnh không mặt vẫn dùng cho body.</div>
+  </div>
+  <div class="modal-footer"><button class="btn" data-close>Huỷ</button>
+    <button class="btn btn-primary" id="nxSave">Lưu &amp; enroll</button></div>
 </div></div></div>
 
 <!-- modal nhập hàng loạt -->

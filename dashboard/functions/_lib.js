@@ -57,8 +57,28 @@ export async function embedImage(env, tenant, fileBlob) {
   return d.embedding;
 }
 
-export const reloadIndex = (env, tenant) =>
-  vision(env, `/admin/reload?modality=product&tenant_id=${encodeURIComponent(tenant)}`, {
+export const reloadIndex = (env, tenant, modality = "product") =>
+  vision(env, `/admin/reload?modality=${modality}&tenant_id=${encodeURIComponent(tenant)}`, {
     method: "POST",
     admin: true,
   });
+
+// face: trả embedding của MẶT TO NHẤT trong ảnh (theo diện tích bbox); null nếu không có mặt.
+export async function embedFace(env, tenant, fileBlob) {
+  const fd = new FormData();
+  fd.append("file", fileBlob, "img.jpg");
+  const d = await vision(env, "/v1/faces/embed", { method: "POST", tenant, body: fd });
+  const faces = (d.faces || []).slice().sort((a, b) => {
+    const area = (x) => (x.bbox_xyxy[2] - x.bbox_xyxy[0]) * (x.bbox_xyxy[3] - x.bbox_xyxy[1]);
+    return area(b) - area(a);
+  });
+  return faces[0]?.embedding || null;
+}
+
+// body ReID: embedding toàn ảnh (crop 1 người). null nếu vision-api không trả.
+export async function embedBody(env, tenant, fileBlob) {
+  const fd = new FormData();
+  fd.append("file", fileBlob, "img.jpg");
+  const d = await vision(env, "/v1/body/embed", { method: "POST", tenant, body: fd });
+  return Array.isArray(d.embedding) ? d.embedding : null;
+}

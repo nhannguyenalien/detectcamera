@@ -5,6 +5,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 let ME = { role: "client", tenants: [] };
 let TENANT = null;
 let prodPage = 1;
+let personPage = 1;
 
 async function api(path, opts = {}) {
   const r = await fetch("/api" + path, opts);
@@ -77,6 +78,7 @@ function curTab() { return $("#tabs .nav-link.active")?.dataset.tab; }
 function refreshTab(tab = curTab()) {
   if (tab === "system") loadHealth();
   if (tab === "products") { prodPage = 1; loadProducts(); }
+  if (tab === "persons") { personPage = 1; loadPersons(); }
   if (tab === "search") $("#searchResult").innerHTML = `<div class="text-secondary">Chọn ảnh rồi bấm Nhận diện.</div>`;
   if (tab === "clients") loadTenants();
   if (tab === "portal") loadPortal();
@@ -96,12 +98,13 @@ async function loadHealth() {
   try {
     const d = await api("/health");
     const r = d.ready || {}, g = d.gpu || {};
-    const face = r.modalities?.face || {}, prod = r.modalities?.product || {};
+    const face = r.modalities?.face || {}, prod = r.modalities?.product || {}, body = r.modalities?.body || {};
     $("#statCards").innerHTML =
       statCard("vision-api", r.ready ? "✅ ready" : "⏳ " + (r.detail || "?"), d.vision_api_url) +
       statCard("GPU", g.name || "—", g.vram_used_mb != null ? `${g.vram_used_mb} / ${g.vram_total_mb} MB` : "") +
-      statCard("Face model", face.enabled ? face.model : "tắt", face.provider || "") +
-      statCard("Product model", prod.enabled ? prod.model : "tắt", prod.provider || "");
+      statCard("Face", face.enabled ? face.model : "tắt", face.provider || "") +
+      statCard("Product", prod.enabled ? prod.model : "tắt", prod.provider || "") +
+      statCard("Body ReID", body.enabled ? body.model : "tắt", body.provider || "");
     $("#healthOut").textContent = JSON.stringify(d, null, 2);
   } catch (e) {
     $("#statCards").innerHTML = statCard("Lỗi", "—", e.message);
@@ -131,6 +134,52 @@ async function loadProducts() {
     await api("/products/" + b.dataset.del, { method: "DELETE" }).catch((e) => flash(e.message));
     loadProducts();
   }));
+}
+
+// ---------- persons (face + body ReID) ----------
+async function loadPersons() {
+  if (!TENANT) return;
+  const q = encodeURIComponent($("#pxq").value.trim());
+  const d = await api(`/persons?tenant=${TENANT}&page=${personPage}&per=50&q=${q}`).catch((e) => (flash(e.message), null));
+  if (!d) return;
+  $("#personCount").textContent = `${d.total} người · trang ${d.page}`;
+  $("#personRows").innerHTML = d.persons.map((p) => `
+    <tr><td>${esc(p.name)}</td><td>${p.n_face}</td><td>${p.n_body}</td>
+    <td class="text-secondary">${new Date(p.created_at).toLocaleString()}</td>
+    <td><button class="btn btn-sm btn-ghost-danger" data-delp="${esc(p.id)}">Xoá</button></td></tr>`).join("") ||
+    `<tr><td colspan="5" class="text-secondary py-4 text-center">Chưa có người nào. Bấm <b>+ Thêm người</b> — upload ảnh <b>toàn thân, thấy rõ mặt</b>.</td></tr>`;
+  $$("#personRows [data-delp]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("Xoá người này (mọi face + body embedding)?")) return;
+    await api("/persons/" + b.dataset.delp, { method: "DELETE" }).catch((e) => flash(e.message));
+    loadPersons();
+  }));
+}
+
+async function identifyPerson(f) {
+  const fd = new FormData(); fd.append("tenant", TENANT); fd.append("image", f);
+  const thr = $("#sThr").value.trim();
+  if (thr) fd.append("face_threshold", thr);
+  $("#searchResult").innerHTML = `<div class="text-secondary">đang nhận diện người…</div>`;
+  try {
+    const d = await api("/identify", { method: "POST", body: fd });
+    const a = d.attributes || {};
+    const pct = (x) => (x != null ? (x * 100).toFixed(0) + "%" : "—");
+    const row = (c, best) => `
+      <div class="card card-sm mb-2 ${best ? "border-primary" : ""}"><div class="card-body">
+        <div class="d-flex align-items-center"><div class="flex-fill">
+          <div class="fw-bold">${esc(c.name || c.person_id)}</div>
+          <div class="text-secondary small mono">${esc(c.person_id)}</div></div>
+          <div class="text-end"><span class="badge bg-blue">${((c.confidence||0)*100).toFixed(1)}%</span></div></div>
+        <div class="text-secondary small mt-1">face ${pct(c.face_score)} · body ${pct(c.body_score)} · nguồn ${esc((c.sources||[]).join("+")||"—")}</div>
+      </div></div>`;
+    $("#searchResult").innerHTML =
+      `<div class="mb-2">${d.match
+        ? `<span class="status status-green">Khớp: <b class="ms-1">${esc(d.match.name||d.match.person_id)}</b> · ${((d.match.confidence||0)*100).toFixed(1)}%</span>`
+        : `<span class="status status-secondary">Không khớp</span>`}
+        <span class="text-secondary small ms-2">${d.inference_ms} ms · mặt ${d.face_visible?"thấy":"KHÔNG thấy"} · áo ${esc(a.upper_color||"?")} / quần ${esc(a.lower_color||"?")}</span></div>` +
+      ((d.candidates||[]).map((c) => row(c, d.match && c.person_id === d.match.person_id)).join("") ||
+       `<div class="text-secondary">Không có candidate. Đã enroll ai ở tab <b>Người</b> chưa?</div>`);
+  } catch (e) { $("#searchResult").innerHTML = `<div class="text-danger">lỗi: ${esc(e.message)}</div>`; }
 }
 
 // ---------- clients ----------
@@ -218,6 +267,7 @@ function wire() {
   $("#btnSearch").onclick = async () => {
     const f = $("#sImg").files[0];
     if (!f) return flash("Chọn ảnh");
+    if ($("#sMode")?.value === "person") return identifyPerson(f);
     const fd = new FormData(); fd.append("tenant", TENANT); fd.append("image", f);
     if ($("#sThr").value.trim()) fd.append("threshold", $("#sThr").value.trim());
     $("#searchResult").innerHTML = `<div class="text-secondary">đang nhận diện…</div>`;
@@ -257,7 +307,26 @@ function wire() {
     finally { $("#bulkRun").disabled = false; }
   });
 
-  [...$$("[data-close]")].forEach((b) => (b.onclick = () => { modal("mProd", false); modal("mTenant", false); modal("mBulk", false); }));
+  $("#pxq") && ($("#pxq").oninput = () => { personPage = 1; loadPersons(); });
+  $("#pxPrev") && ($("#pxPrev").onclick = () => { if (personPage > 1) { personPage--; loadPersons(); } });
+  $("#pxNext") && ($("#pxNext").onclick = () => { personPage++; loadPersons(); });
+  $("#btnAddPerson") && ($("#btnAddPerson").onclick = () => { ["nxName","nxMeta"].forEach((i)=>($("#"+i).value="")); $("#nxImgs").value=""; modal("mPerson", true); });
+  $("#nxSave") && ($("#nxSave").onclick = async () => {
+    const fd = new FormData();
+    fd.append("tenant", TENANT);
+    fd.append("name", $("#nxName").value.trim());
+    fd.append("meta", $("#nxMeta").value.trim() || "{}");
+    [...$("#nxImgs").files].forEach((f) => fd.append("images", f));
+    $("#nxSave").disabled = true;
+    try {
+      const r = await api("/persons", { method: "POST", body: fd });
+      modal("mPerson", false);
+      flash(`Đã thêm ${r.name}: ${r.face_count} face + ${r.body_count} body` + (r.images_without_face ? ` (${r.images_without_face} ảnh không thấy mặt)` : ""), "success");
+      loadPersons();
+    } catch (e) { flash(e.message); }
+    finally { $("#nxSave").disabled = false; }
+  });
+  [...$$("[data-close]")].forEach((b) => (b.onclick = () => { modal("mProd", false); modal("mTenant", false); modal("mBulk", false); modal("mPerson", false); }));
   document.querySelectorAll(".btn-close[data-bs-dismiss]").length; // tabler handles
 }
 async function boot2() {

@@ -66,5 +66,38 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS ix_events_tenant ON events (tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_events_kind ON events (kind, created_at DESC);
 
+-- ===== Face + Body ReID (recognition người) — person_id CHUNG cho cả 2 modality =====
+CREATE TABLE IF NOT EXISTS persons (
+  id         TEXT PRIMARY KEY,
+  tenant_id  TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  meta       JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_persons_tenant ON persons (tenant_id);
+
+CREATE TABLE IF NOT EXISTS face_embeddings (
+  id         TEXT PRIMARY KEY,
+  person_id  TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+  tenant_id  TEXT NOT NULL,
+  vec        vector(512) NOT NULL,          -- InsightFace ArcFace, L2-normalized
+  note       TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_femb_person ON face_embeddings (person_id);
+CREATE INDEX IF NOT EXISTS ix_femb_tenant ON face_embeddings (tenant_id);
+
+CREATE TABLE IF NOT EXISTS body_embeddings (
+  id         TEXT PRIMARY KEY,
+  person_id  TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+  tenant_id  TEXT NOT NULL,
+  vec        vector(256) NOT NULL,          -- OMZ OSNet person-reidentification-retail-0277
+  note       TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_bemb_person ON body_embeddings (person_id);
+CREATE INDEX IF NOT EXISTS ix_bemb_tenant ON body_embeddings (tenant_id);
+
 -- seed demo
 INSERT INTO tenants (id, name) VALUES ('t_demo', 'Demo') ON CONFLICT (id) DO NOTHING;
