@@ -32,6 +32,8 @@ BODY_MODEL_PATH = os.getenv("VISION_BODY_MODEL_PATH", "/opt/models/reid/model.on
 BODY_INPUT_H = int(os.getenv("VISION_BODY_INPUT_H", "256"))
 BODY_INPUT_W = int(os.getenv("VISION_BODY_INPUT_W", "128"))
 BODY_MATCH_THRESHOLD = float(os.getenv("VISION_BODY_MATCH_THRESHOLD", "0.5"))
+# imagenet (RGB, /255, mean/std — OSNet torchreid) | raw_bgr (BGR, 0..255 — OMZ person-reid)
+BODY_PREPROCESS = os.getenv("VISION_BODY_PREPROCESS", "imagenet")
 BODY_TOP_K = int(os.getenv("VISION_BODY_TOP_K", "5"))
 
 BACKEND_URL = os.getenv("VISION_BACKEND_URL", "http://mock-backend:9000")

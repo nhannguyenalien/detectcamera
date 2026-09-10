@@ -52,6 +52,14 @@ RUN mkdir -p /opt/models/dinov2 \
         https://huggingface.co/onnx-community/dinov2-small-ONNX/resolve/main/onnx/model.onnx ) \
  && ls -la /opt/models/dinov2
 
+# 5c) OMZ person-reidentification-retail-0277 (OSNet, ~9.6MB) cho body ReID.
+#     Output reid_embedding 256-d; input data [1,3,256,128] BGR 0..255 -> VISION_BODY_PREPROCESS=raw_bgr.
+RUN mkdir -p /opt/models/reid \
+ && curl -fsSL -o /opt/models/reid/model.onnx \
+      https://storage.openvinotoolkit.org/repositories/open_model_zoo/2023.0/models_bin/1/person-reidentification-retail-0277/person-reidentification-retail-0265.onnx \
+ && echo "2c79fadc11b59c207e42db877c6c087435116eec2b6adc972e93a5689a67d9991e188d986ceaf73e7fbd5a2a63034b1a  /opt/models/reid/model.onnx" | sha384sum -c - \
+ && ls -la /opt/models/reid
+
 COPY app ./app
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

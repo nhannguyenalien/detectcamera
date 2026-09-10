@@ -51,11 +51,18 @@ class BodyEngine:
             self.dim = int(out_shape[-1])
 
     def warmup(self) -> None:
-        self.sess.run(None, {self._in_name: np.zeros((1, 3, self._h, self._w), dtype=np.float32)})
+        x = (np.random.rand(1, 3, self._h, self._w).astype(np.float32) * 255.0)
+        self.sess.run(None, {self._in_name: x})
 
     def _preprocess(self, raw: bytes) -> np.ndarray:
         img = Image.open(io.BytesIO(raw)).convert("RGB").resize((self._w, self._h), _BILINEAR)
-        arr = (np.asarray(img, dtype=np.float32) / 255.0 - _MEAN) / _STD
+        arr = np.asarray(img, dtype=np.float32)
+        if config.BODY_PREPROCESS == "raw_bgr":
+            # OMZ person-reidentification-retail: BGR, 0..255, KHÔNG mean/std
+            arr = np.ascontiguousarray(arr[:, :, ::-1])
+        else:
+            # ImageNet: RGB, /255, chuẩn hoá theo mean/std (OSNet torchreid, DINOv2-style)
+            arr = (arr / 255.0 - _MEAN) / _STD
         return np.ascontiguousarray(arr.transpose(2, 0, 1)[None])  # [1,3,H,W]
 
     def embed(self, raw: bytes) -> tuple[np.ndarray, float]:
