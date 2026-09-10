@@ -21,9 +21,17 @@ class BackendClient:
         return r.json().get("tenants", [])
 
     async def get_face_embeddings(self, tenant_id: str) -> dict:
-        r = await self._c.get(f"/internal/tenants/{tenant_id}/face-embeddings")
-        r.raise_for_status()
-        return r.json()
+        empty = {"dim": config.EMB_DIM, "persons": []}
+        try:
+            r = await self._c.get(f"/internal/tenants/{tenant_id}/face-embeddings")
+            if r.status_code == 404:
+                return empty
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:  # noqa: BLE001 - backend chưa implement / non-JSON -> index rỗng
+            print(f"[backend] face-embeddings unavailable ({e}); dùng index rỗng")
+            return empty
+        return data if isinstance(data, dict) else empty
 
     async def get_product_embeddings(self, tenant_id: str) -> dict:
         r = await self._c.get(f"/internal/tenants/{tenant_id}/product-embeddings")
