@@ -196,18 +196,28 @@ Body lỗi: `{ "detail": "<mô tả>" }`.
 
 ---
 
-## 5. Luồng enroll 1 người
+## 5. Nhận diện người — enroll + identify
 
-```
-1) POST /v1/faces/embed            (ảnh chân dung)     -> faces[0].embedding  (512-d)
-2) POST {BACKEND}/internal/tenants/{tid}/persons
-   Body: { "name": "Nguyen Van A", "embeddings": [ <embedding> ] }
-   Header: X-Internal-Key: <INTERNAL_KEY>
-3) POST /admin/reload?tenant_id={tid}                  (token admin)
-4) POST /v1/faces/search           (ảnh cần kiểm tra)  -> faces[i].match.person_id
-```
+### 5.1 Cách nhanh: dashboard
+Tab **Người → + Thêm người** → upload 1–12 ảnh (ưu tiên **toàn thân, thấy rõ mặt**).
+Dashboard tự: `/v1/faces/embed` (mặt to nhất) + `/v1/body/embed` (toàn thân) → lưu Neon →
+`/admin/reload?modality=face` & `=body`. Rồi tab **Test nhận diện → Kiểu = Người**.
 
-`scripts/e2e-test.sh` chạy đúng 4 bước này với ảnh mẫu.
+### 5.2 Tự code enroll (không qua UI)
+```
+1) POST /v1/faces/embed   (ảnh)  -> faces[].embedding (512-d)   # lấy mặt to nhất
+   POST /v1/body/embed    (ảnh)  -> embedding (256-d)           # crop toàn thân
+2) POST {BACKEND}/internal/tenants/{tid}/persons     header X-Internal-Key
+   Body: { "name": "Nguyen Van A", "person_id": "p_001"?,
+           "face_embeddings": [[512 số]], "body_embeddings": [[256 số]] }
+3) POST /admin/reload?modality=all&tenant_id={tid}   (token admin)
+4) POST /v1/persons/identify  (ảnh cần kiểm tra)  -> match.{person_id,name,confidence}
+```
+- `person_id` **chung** cho face + body — fusion mới gộp được 2 tín hiệu của cùng người.
+- Enroll thiếu 1 loại (chỉ body, hoặc chỉ face) vẫn chạy — identify tự dùng loại có sẵn.
+- Đổi model → **re-embed toàn bộ** (embedding cũ không so được với model mới).
+
+`scripts/e2e-test.sh` chạy flow face-only với ảnh mẫu.
 
 ---
 

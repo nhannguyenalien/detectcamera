@@ -26,6 +26,10 @@ Proxmox promox
 `vision-api` (VRAM đo thực tế: face+product+body ~0.9GB/4GB, còn nhiều chỗ trên GTX 1650).
 Body ReID chạy **chọn lọc** (1 crop đại diện / track, khi máy rảnh — KHÔNG bám stream).
 
+> **Nhận diện người (Phase 1) đã chạy end-to-end**: enroll face+body qua dashboard
+> (tab **Người**) → `POST /v1/persons/identify` trả `person_id` + confidence (fusion face+body).
+> Xem `dashboard/README.md` §"Nhận diện người" và `API.md` §5.
+>
 > **Chưa production.** Xem [`GO-LIVE.md`](./GO-LIVE.md) (checklist blocker),
 > [`BACKEND-CONTRACT.md`](./BACKEND-CONTRACT.md) (spec) và [`INTEGRATION.md`](./INTEGRATION.md)
 > (hướng dẫn từng bước cho dev backend khách — schema SQL, endpoint, luồng enroll, checklist).

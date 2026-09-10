@@ -9,9 +9,11 @@ Cloudflare Pages
  ├─ functions/api/*      dashboard API   ── sau Cloudflare Access
  └─ functions/internal/* backend cho vision-api gọi ── sau X-Internal-Key (exclude khỏi Access)
         │
-        ▼  Neon (tenants, api_tokens, products, product_embeddings, events)
+        ▼  Neon (tenants, api_tokens, products+product_embeddings,
+                 persons + face_embeddings(512) + body_embeddings(256), events)
         ▲
-        └─ khi enroll: gọi vision-api /v1/products/embed → lưu vec → /admin/reload
+        └─ enroll SP:     /v1/products/embed        → lưu vec → /admin/reload?modality=product
+        └─ enroll người:  /v1/faces/embed + /v1/body/embed → lưu → /admin/reload?modality=face,body
 ```
 
 ## Đăng nhập
@@ -30,7 +32,8 @@ Role: email trong `ADMIN_EMAILS` (hoặc `users.role='admin'`) = admin; còn l�
 | | admin (email trong `ADMIN_EMAILS`) | client (email = `tenants.owner_email`) |
 |---|---|---|
 | Sản phẩm CRUD + enroll | mọi tenant | tenant của mình |
-| Test nhận diện | ✓ | ✓ (tenant mình) |
+| **Người** (enroll face+body, xoá) | mọi tenant | tenant của mình |
+| Test nhận diện (SP + Người) | ✓ | ✓ (tenant mình) |
 | Clients (tạo tenant) | ✓ | – |
 | Token & Usage | mọi tenant | tenant mình (xem + rotate token) |
 | Events | ✓ | tenant mình |
@@ -89,7 +92,62 @@ npm run dev                      # wrangler pages dev -> http://localhost:8788
 ## Endpoint `/internal/*` (vision-api gọi) — khớp `../BACKEND-CONTRACT.md`
 - `GET /internal/tenants`
 - `GET /internal/tenants/{tid}/product-embeddings`   (dim 384, dinov2-small)
+- `GET /internal/tenants/{tid}/face-embeddings`      (dim 512, arcface)
+- `GET /internal/tenants/{tid}/body-embeddings`      (dim 256, OSNet reid-0277)
 - `GET /internal/api-tokens`
 - `POST /internal/events`
 - `GET /internal/healthz`
-- `POST /internal/tenants/{tid}/products`, `DELETE .../products/{pid}`  (tuỳ chọn)
+- `POST /internal/tenants/{tid}/products` · `.../persons`  (enroll ngoài, tuỳ chọn)
+
+## Nhận diện người (Face + Body ReID) — HƯỚNG DẪN DÙNG
+
+`person_id` **chung** cho face và body → fusion `/v1/persons/identify` gộp 2 tín hiệu.
+Body ReID chạy **chọn lọc** (1 crop đại diện / track, khi máy rảnh — KHÔNG bám stream video).
+
+### A. Enroll người (trên dashboard, vai trò admin hoặc client)
+1. Tab **Người** → **+ Thêm người**.
+2. Nhập **Tên** (+ Meta JSON tuỳ chọn, vd `{"phong_ban":"KV1"}`).
+3. Chọn **1–12 ảnh**. Ưu tiên ảnh **toàn thân, thấy rõ mặt**:
+   - mỗi ảnh → embed **mặt to nhất** (512-d) *và* embed **toàn thân** (256-d);
+   - ảnh không có mặt vẫn dùng được cho body (bảng báo `face_count` / `body_count`).
+4. **Lưu & enroll** → tự lưu Neon + gọi `/admin/reload?modality=face` và `=body`. Xong là nhận diện được ngay.
+5. Xoá người: nút **Xoá** ở tab Người (xoá cả face + body embedding + reload).
+
+> Enroll từ hệ thống ngoài (không qua UI): `POST {dashboard}/internal/tenants/{tid}/persons`
+> header `X-Internal-Key`, body `{name, person_id?, face_embeddings?:[[512]], body_embeddings?:[[256]]}`.
+> Tự lấy embedding trước bằng `POST {vision-api}/v1/faces/embed` + `/v1/body/embed`.
+
+### B. Test nhận diện (trên dashboard)
+Tab **Test nhận diện** → **Kiểu = Người — fusion face+body** → chọn ảnh → **Nhận diện**.
+Kết quả: `match` (tên + confidence) · `face_score` / `body_score` · `nguồn` (face/body) ·
+màu áo/quần · `mặt thấy / KHÔNG thấy`.
+
+### C. Client gọi trực tiếp vision-api
+```bash
+curl -F file=@crop_1_nguoi.jpg \
+  -H "Authorization: Bearer <TOKEN client tenant>" -H "X-Tenant-ID: t_demo" \
+  "https://vision-api.schoolsai.work/v1/persons/identify?top_k=5&face_threshold=0.40&body_threshold=0.5"
+```
+```json
+{ "match": { "person_id": "p_...", "name": "...", "confidence": 0.91,
+             "face_score": 0.95, "body_score": 0.86, "clothing_score": null,
+             "sources": ["face","body"] },
+  "attributes": { "upper_color": "red", "lower_color": "navy", ... },
+  "face_visible": true, "candidates": [ ... ], "inference_ms": 71.4 }
+```
+Chỉ cần embedding thô: `POST /v1/body/embed` (256-d) · `POST /v1/faces/embed` (512-d).
+Chỉ body / chỉ face: `POST /v1/body/search` · `POST /v1/faces/search`.
+
+### D. Calibrate threshold (BẮT BUỘC trước khi tin số)
+- `face_threshold` mặc định `0.40`, `body_threshold` `0.5` — **chưa đo trên camera thật**.
+- Dựng tập gallery + probe thật (cùng người / khác người, **cùng đồ và khác đồ** riêng).
+- Đo FAR/FRR theo từng ngưỡng → chọn. Body ReID cùng-đồ ~0.9+, khác-đồ tụt mạnh (dựa mặt/vóc dáng).
+
+### E. Deploy lại dashboard (KHÔNG git-auto)
+CF Pages project `vision-dashboard` **không nối git** → sửa `dashboard/` xong phải deploy tay:
+```bash
+cd dashboard && npm i
+CLOUDFLARE_API_TOKEN=<token Pages:Edit> CLOUDFLARE_ACCOUNT_ID=<id> \
+  npx wrangler pages deploy public --project-name=vision-dashboard --branch=main
+```
+Đổi schema Neon: `psql "$DATABASE_URL" -f schema.sql` (các lệnh đều `IF NOT EXISTS`).
