@@ -31,11 +31,17 @@ class BackendClient:
         return r.json()
 
     async def get_body_embeddings(self, tenant_id: str) -> dict:
-        r = await self._c.get(f"/internal/tenants/{tenant_id}/body-embeddings")
-        if r.status_code == 404:  # backend chưa implement -> index rỗng, service vẫn ready
-            return {"dim": config.BODY_EMB_DIM, "persons": []}
-        r.raise_for_status()
-        return r.json()
+        empty = {"dim": config.BODY_EMB_DIM, "persons": []}
+        try:
+            r = await self._c.get(f"/internal/tenants/{tenant_id}/body-embeddings")
+            if r.status_code == 404:
+                return empty
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:  # noqa: BLE001 - backend chưa implement / trả non-JSON -> index rỗng
+            print(f"[backend] body-embeddings unavailable ({e}); dùng index rỗng")
+            return empty
+        return data if isinstance(data, dict) else empty
 
     async def get_api_tokens(self) -> dict:
         r = await self._c.get("/internal/api-tokens")
