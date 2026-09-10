@@ -25,6 +25,8 @@ EMB_DIM = int(os.getenv("EMB_DIM", "512"))                      # face
 EMB_MODEL = os.getenv("EMB_MODEL", "buffalo_l/arcface_r50")
 PRODUCT_EMB_DIM = int(os.getenv("PRODUCT_EMB_DIM", "384"))      # product (DINOv2-S)
 PRODUCT_EMB_MODEL = os.getenv("PRODUCT_EMB_MODEL", "dinov2-small")
+BODY_EMB_DIM = int(os.getenv("BODY_EMB_DIM", "256"))           # body ReID (OSNet reid-0277)
+BODY_EMB_MODEL = os.getenv("BODY_EMB_MODEL", "person-reidentification-retail-0277")
 SEED_TENANTS = [t.strip() for t in os.getenv("SEED_TENANTS", "t_demo").split(",") if t.strip()]
 
 _lock = threading.Lock()
@@ -83,11 +85,19 @@ def _init_db() -> None:
             vec BLOB NOT NULL,
             created_at REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS body_embeddings (
+            id TEXT PRIMARY KEY,
+            person_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            vec BLOB NOT NULL,
+            created_at REAL NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS ix_persons_tenant ON persons(tenant_id);
         CREATE INDEX IF NOT EXISTS ix_emb_person ON embeddings(person_id);
         CREATE INDEX IF NOT EXISTS ix_events_tenant ON events(tenant_id);
         CREATE INDEX IF NOT EXISTS ix_products_tenant ON products(tenant_id);
         CREATE INDEX IF NOT EXISTS ix_pemb_product ON product_embeddings(product_id);
+        CREATE INDEX IF NOT EXISTS ix_bemb_person ON body_embeddings(person_id);
         """
     )
     now = time.time()
@@ -217,9 +227,48 @@ def delete_person(tid: str, pid: str) -> Dict[str, Any]:
     dependencies=[Depends(require_internal)],
 )
 def body_embeddings(tid: str = Path(...)) -> Dict[str, Any]:
-    """Body ReID embeddings — cùng person_id với face. Bảng dùng lại face_embeddings
-    nếu chưa có bảng riêng thì trả rỗng (Phase 1)."""
-    return {"tenant_id": tid, "dim": 512, "persons": []}
+    """Body ReID embeddings (dim 256). person_id CHUNG với face -> fusion gộp được."""
+    if not db().execute("SELECT 1 FROM tenants WHERE id=?", (tid,)).fetchone():
+        raise HTTPException(404, "tenant không tồn tại")
+    prows = db().execute(
+        "SELECT id,name FROM persons WHERE tenant_id=? ORDER BY created_at", (tid,)
+    ).fetchall()
+    persons = []
+    for pid, name in prows:
+        erows = db().execute(
+            "SELECT vec FROM body_embeddings WHERE person_id=? ORDER BY created_at", (pid,)
+        ).fetchall()
+        if erows:
+            persons.append({"person_id": pid, "name": name,
+                            "embeddings": [_unpack(e[0], BODY_EMB_DIM) for e in erows]})
+    return {"tenant_id": tid, "dim": BODY_EMB_DIM, "model": BODY_EMB_MODEL, "persons": persons}
+
+
+@app.post(
+    "/internal/tenants/{tid}/body-embeddings",
+    dependencies=[Depends(require_internal)],
+    status_code=201,
+)
+def add_body_embeddings(body: PersonIn, tid: str = Path(...)) -> Dict[str, Any]:
+    """Enroll body ReID cho 1 person đã có (person_id bắt buộc — enroll face trước để lấy id)."""
+    if not body.person_id:
+        raise HTTPException(422, "cần person_id (enroll /internal/tenants/{tid}/persons trước)")
+    with _lock:
+        if not db().execute(
+            "SELECT 1 FROM persons WHERE id=? AND tenant_id=?", (body.person_id, tid)
+        ).fetchone():
+            raise HTTPException(404, "person_id không tồn tại trong tenant")
+        now = time.time()
+        for vec in body.embeddings:
+            db().execute(
+                "INSERT INTO body_embeddings(id,person_id,tenant_id,vec,created_at) VALUES (?,?,?,?,?)",
+                (f"be_{uuid.uuid4().hex[:12]}", body.person_id, tid, _pack(vec, BODY_EMB_DIM), now),
+            )
+        db().commit()
+        cnt = db().execute(
+            "SELECT COUNT(*) FROM body_embeddings WHERE person_id=?", (body.person_id,)
+        ).fetchone()[0]
+    return {"person_id": body.person_id, "embedding_count": cnt}
 
 
 @app.get(

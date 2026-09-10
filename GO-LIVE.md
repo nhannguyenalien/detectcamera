@@ -11,7 +11,7 @@ Owner: **me** = làm được trong code/hạ tầng hiện có · **you** = c�
 | 2 | **Đấu backend thật** thay `mock-backend` | you | ⛔ chờ | implement 7 endpoint trong `BACKEND-CONTRACT.md`, set `VISION_BACKEND_URL` |
 | 3 | **Rotate & quản lý secrets** — token client/admin, `INTERNAL_KEY` hiện là bản dev do tool sinh | you | ⛔ chờ | sinh token mới (≥32 byte random), set qua Coolify secrets, xoá bản cũ khỏi `.env`/notes/memory |
 | 4 | **Kênh truyền có mã hoá** — hiện LAN plaintext, Bearer token bay rõ | you | ⛔ chờ | Tailscale/WireGuard giữa client ↔ VM, hoặc TLS termination (Coolify proxy + domain nội bộ) |
-| 5 | **Calibrate threshold** — `MATCH_THRESHOLD=0.40` chưa đo trên dữ liệu thật | you (data) + me (script) | ⛔ chờ data | dựng tập gallery/probe thật → đo FAR/FRR → chọn ngưỡng theo yêu cầu nghiệp vụ, ghi lại |
+| 5 | **Calibrate threshold** — `MATCH_THRESHOLD=0.40` (face), `VISION_BODY_MATCH_THRESHOLD=0.5` (body) chưa đo trên dữ liệu thật | you (data) + me (script) | ⛔ chờ data | dựng tập gallery/probe thật → đo FAR/FRR → chọn ngưỡng, ghi lại. Body: đo riêng cùng-đồ vs khác-đồ |
 | 6 | **Pháp lý sinh trắc học** — consent, retention, xoá theo yêu cầu, audit | you | ⛔ chờ | có quy trình consent; `DELETE /internal/tenants/{tid}/persons/{pid}` đã sẵn; audit qua `/internal/events` |
 
 ## 🟠 Nên có trước hoặc ngay sau go-live
@@ -32,7 +32,11 @@ Owner: **me** = làm được trong code/hạ tầng hiện có · **you** = c�
 
 - Queue (Redis) + batch inference khi nhiều camera bắn burst — GTX 1650 + `GPU_CONCURRENCY=1` là nút thắt
 - HA: hiện 1 GPU / 1 VM / 1 container — mọi thứ chết nếu VM chết
-- Phase 2: OSNet (body ReID) + vehicle + OCR biển số vào cùng `vision-api` (VRAM còn ~3.4GB)
+- ~~Phase 2: OSNet body ReID~~ ✅ **Phase 1 DONE** — modality `body` (OMZ `person-reidentification-retail-0277`,
+  256-d) + `/v1/persons/identify` fusion face+body. VRAM face+product+body ~0.9GB/4GB.
+  Còn lại: backend `/internal/.../body-embeddings` + enroll UI (Phase 1.5); clothing_score fusion (Phase 1.5);
+  gait + pose/body-shape cho case đổi quần áo (Phase 2/3 — cần calibrate + có thể cần GPU to hơn).
+- vehicle detector + OCR biển số vào cùng `vision-api` (đo VRAM rồi bật)
 - GTX 1650 → RTX 3060/3090: không đổi kiến trúc, chỉ đổi `INSIGHTFACE_MODEL` + `GPU_CONCURRENCY`
 - DNS-rebinding TOCTOU: SSRF guard resolve rồi mới fetch — vẫn còn khe hẹp. Khoá chặt bằng `VISION_URL_ALLOWLIST` hoặc `VISION_ALLOW_URL_FETCH=false` (chỉ nhận upload)
 

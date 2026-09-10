@@ -1,6 +1,7 @@
 # vision-api — API reference
 
-Face detection + recognition (InsightFace SCRFD + ArcFace) trên GPU, FAISS in-RAM, multi-tenant.
+Face recognition (SCRFD + ArcFace) · Product visual search (DINOv2-S) · **Body ReID** (OSNet
+`person-reidentification-retail-0277`) + fusion. Trên GPU, FAISS in-RAM, multi-tenant.
 
 - Base URL (LAN): `http://192.168.1.50:18090`
 - Interactive: `GET /docs` (Swagger), `GET /redoc`
@@ -116,8 +117,52 @@ Form: `file` | `url`. Query: `top_k` (mặc định `5`), `threshold` (mặc đ�
 ```
 `match=null` khi candidate top-1 < threshold.
 
+### `POST /v1/body/embed` — trích body ReID embedding (client)
+Form: `file` | `url`. Crop **TOÀN THÂN** 1 người (đã detect `person`). Vector **256-d** đã L2-norm.
+```json
+{ "request_id": "req_…", "tenant_id": "t_demo", "model": "person-reidentification-retail-0277",
+  "dim": 256, "embedding": [0.031, -0.012, /* …254 số */ ], "inference_ms": 32.8 }
+```
+
+### `POST /v1/body/search` — nhận lại người theo toàn thân (client)
+Form: `file` | `url`. Query: `top_k` (`5`), `threshold` (`0.5` — **calibrate trên camera thật**).
+```json
+{ "request_id": "req_…", "tenant_id": "t_demo",
+  "match": { "person_id": "P00125", "name": "…", "score": 0.86 },
+  "candidates": [ … ], "threshold": 0.5, "inference_ms": 17.0,
+  "index": { "persons": 12, "vectors": 40 } }
+```
+
+### `POST /v1/body/attributes` — màu trang phục (client)
+Form: `file` | `url`. Thuần CV (numpy/PIL), **không** model. Dùng để **lọc nhanh**, KHÔNG phải ID.
+```json
+{ "upper_color": "red", "upper_rgb": [200,40,40], "lower_color": "navy", "lower_rgb": [20,20,90] }
+```
+
+### `POST /v1/persons/identify` — fusion face + body (client)
+Form: `file` | `url` (crop 1 người). Query: `top_k` (`5`), `face_threshold` (`0.40`), `body_threshold` (`0.5`).
+Chạy face (mặt to nhất) + body ReID + attributes trên **cùng 1 crop**, gộp candidate theo `person_id`.
+Trọng số theo chất lượng: không thấy mặt → chỉ body; mặt rõ (`face_score ≥ face_threshold`) →
+`0.65·face + 0.35·body`; mặt mờ + có body → `0.25·face + 0.75·body`.
+```json
+{ "request_id": "req_…", "tenant_id": "t_demo",
+  "match": { "person_id": "P00125", "name": "…", "confidence": 0.91,
+             "face_score": 0.95, "body_score": 0.86, "clothing_score": null,
+             "sources": ["face","body"] },
+  "candidates": [ … ],
+  "attributes": { "upper_color": "red", "lower_color": "navy", … },
+  "face_visible": true, "inference_ms": 37.1 }
+```
+`match` != null khi candidate top-1 đạt **face_threshold HOẶC body_threshold**.
+`clothing_score` = `null` ở Phase 1 (cần backend lưu attributes gallery — Phase 1.5).
+
+### `GET /v1/body/index/stats` — client/admin
+```json
+{ "stats": { "t_demo": { "persons": 12, "vectors": 40 } } }
+```
+
 ### `POST /admin/reload` — rebuild FAISS (admin)
-Query: `modality` (`face` | `product` | `all`, mặc định `all`), `tenant_id` (bỏ trống = tất cả).
+Query: `modality` (`face` | `product` | `body` | `all`, mặc định `all`), `tenant_id` (bỏ trống = tất cả).
 ```json
 { "reloaded": { "face": ["t_demo"], "product": ["t_demo"] },
   "stats": { "face": { "t_demo": { "persons": 2, "vectors": 2 } },
@@ -220,11 +265,15 @@ Agent nên: gọi `GET /` lấy manifest → `GET /ready` đợi `ready:true` �
 | Method | Path | Việc |
 |---|---|---|
 | GET | `/internal/tenants` | `{ "tenants": [ {id,name} ] }` |
-| GET | `/internal/tenants/{tid}/face-embeddings` | `{ tenant_id, dim, model, persons:[{person_id,name,embeddings:[[…]]}] }` |
+| GET | `/internal/tenants/{tid}/face-embeddings` | face: `{ tenant_id, dim:512, persons:[{person_id,name,embeddings:[[…]]}] }` |
+| GET | `/internal/tenants/{tid}/body-embeddings` | body ReID: `{ tenant_id, dim:256, persons:[{person_id,name,embeddings:[[…]]}] }` — `person_id` **chung với face** |
 | POST | `/internal/tenants/{tid}/persons` | body `{name, embeddings:[[…]], person_id?}` → tạo/ghi thêm |
 | DELETE | `/internal/tenants/{tid}/persons/{pid}` | xoá |
 | POST | `/internal/events` | vision-api ghi audit `{tenant_id, kind, payload}` |
 | GET | `/internal/events?tenant_id=&limit=` | đọc audit (debug) |
 | GET | `/healthz` | – |
 
-Khi có backend thật: implement 7 endpoint trên, set `VISION_BACKEND_URL` + `VISION_BACKEND_INTERNAL_KEY`, bỏ container `mock-backend`.
+Khi có backend thật: implement các endpoint trên, set `VISION_BACKEND_URL` + `VISION_BACKEND_INTERNAL_KEY`, bỏ container `mock-backend`.
+
+> vision-api **fail-soft**: `/internal/.../{face,body}-embeddings` chưa có / trả non-JSON → index rỗng + log,
+> service vẫn `ready` (không 500). `match` sẽ luôn `null` tới khi backend trả đúng shape.

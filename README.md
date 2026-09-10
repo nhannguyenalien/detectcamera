@@ -1,26 +1,30 @@
-# vision-stack — GPU visual recognition appliance (face + product)
+# vision-stack — GPU visual recognition appliance (face + product + body ReID)
 
 ```
 Proxmox promox
   └── VM 103 gpu-api (Ubuntu 22.04, GTX 1650 passthrough)
         └── Docker + NVIDIA Container Toolkit
               ├── Coolify            (quản lý/deploy/log/restart/healthcheck)
-              ├── vision-api         (FastAPI + SCRFD + ArcFace + FAISS in-RAM)   :18090
+              ├── vision-api         (FastAPI + SCRFD/ArcFace + DINOv2 + OSNet ReID + FAISS in-RAM) :18090
               └── mock-backend       (FastAPI + SQLite = source-of-truth giả lập) :18091 (localhost)
 ```
 
-- **vision-api** — GPU inference, 2 modality dùng chung 1 service / 1 GPU worker:
+- **vision-api** — GPU inference, 3 modality dùng chung 1 service / 1 GPU worker:
   - **face** — InsightFace SCRFD + ArcFace (nhiều mặt / ảnh), `/v1/faces/*`
   - **product** — DINOv2-S visual search, **1 ảnh = 1 sản phẩm**, so với catalog tenant, `/v1/products/*`
+  - **body** (Phase 1) — Person ReID toàn thân (OMZ OSNet `person-reidentification-retail-0277`,
+    embedding 256-d). Nhận lại 1 người giữa nhiều camera. `/v1/body/*` + fusion `/v1/persons/identify`
+    (face + body). Quần áo mạnh nhưng **không** bền — đổi đồ thì tin cậy giảm; gait/pose = Phase 2/3.
   FAISS index/tenant/modality trong RAM, sync từ backend lúc khởi động, rebuild qua `/admin/reload?modality=`.
-  Bật/tắt: `VISION_ENABLE_FACE`, `VISION_ENABLE_PRODUCTS`.
+  Bật/tắt: `VISION_ENABLE_FACE`, `VISION_ENABLE_PRODUCTS`, `VISION_ENABLE_BODY`.
 - **mock-backend** — thay chỗ backend/DB thật. Giữ tenants / persons / embeddings / events.
   Khi có backend thật: trỏ `VISION_BACKEND_URL` sang đó, implement 4 endpoint `/internal/*`
   (xem `mock-backend/app/main.py`), bỏ container này.
 - DB thật **không** đặt trong VM này — đúng mô hình bạn chốt.
 
-Đợt này: **chỉ Face**, **LAN only** (chưa Tailscale/domain). Body ReID / Vehicle / OCR thêm sau
-vào cùng `vision-api` (đo VRAM rồi mới bật, GTX 1650 chỉ 4GB).
+Đợt này: **Face + Product + Body ReID (Phase 1)**. Vehicle / OCR / gait / pose thêm sau vào cùng
+`vision-api` (VRAM đo thực tế: face+product+body ~0.9GB/4GB, còn nhiều chỗ trên GTX 1650).
+Body ReID chạy **chọn lọc** (1 crop đại diện / track, khi máy rảnh — KHÔNG bám stream).
 
 > **Chưa production.** Xem [`GO-LIVE.md`](./GO-LIVE.md) (checklist blocker),
 > [`BACKEND-CONTRACT.md`](./BACKEND-CONTRACT.md) (spec) và [`INTEGRATION.md`](./INTEGRATION.md)
@@ -54,8 +58,13 @@ Rate limit theo tenant: `VISION_RATE_LIMIT_PER_MIN` (sliding-window in-process).
 | POST | `/v1/faces/detect` | client | ảnh → bbox + det_score |
 | POST | `/v1/faces/embed` | client | ảnh → embedding 512-d (L2-norm) để enroll |
 | POST | `/v1/faces/search` | client | ảnh → mỗi mặt: `person_id` + score (FAISS). `?top_k` `?threshold` |
-| POST | `/admin/reload` | admin | rebuild FAISS. `?tenant_id=` hoặc bỏ trống = tất cả |
-| GET | `/v1/index/stats` | client/admin | số person/vector đã index |
+| POST | `/v1/products/embed` · `/v1/products/search` | client | 1 ảnh = 1 sp (DINOv2-S, 384-d) |
+| POST | `/v1/body/embed` | client | crop toàn thân → ReID embedding 256-d (L2-norm) để enroll |
+| POST | `/v1/body/search` | client | crop toàn thân → `person_id` + score. `?top_k` `?threshold` |
+| POST | `/v1/body/attributes` | client | crop → màu áo / màu quần (lọc nhanh, **KHÔNG** phải ID) |
+| POST | `/v1/persons/identify` | client | crop 1 người → **fusion** face + body → `person_id` + confidence |
+| POST | `/admin/reload` | admin | rebuild FAISS. `?modality=face\|product\|body\|all` `?tenant_id=` |
+| GET | `/v1/index/stats` · `/v1/products/index/stats` · `/v1/body/index/stats` | client/admin | số person/vector đã index |
 
 Body ảnh: `multipart/form-data` với `file=@anh.jpg` **hoặc** `url=<http...>`.
 
@@ -71,9 +80,15 @@ curl -F file=@a.jpg -H "Authorization: Bearer $TOKEN" -H "X-Tenant-ID: t_demo" \
 
 ## Enroll 1 người (flow chuẩn)
 ```
-POST /v1/faces/embed              -> lấy embedding[]
-POST {backend}/internal/tenants/{tid}/persons  {name, embeddings:[emb]}
-POST /admin/reload?tenant_id={tid}
+# face:
+POST /v1/faces/embed              -> lấy embedding[] (512-d)
+POST {backend}/internal/tenants/{tid}/persons        {name, embeddings:[emb]}
+POST /admin/reload?modality=face&tenant_id={tid}
+
+# body ReID (cùng person_id với face -> fusion mới gộp được):
+POST /v1/body/embed              -> embedding (256-d), crop TOÀN THÂN
+POST {backend}/internal/tenants/{tid}/body-embeddings  {person_id, name, embeddings:[emb]}
+POST /admin/reload?modality=body&tenant_id={tid}
 ```
 `scripts/e2e-test.sh` chạy đúng flow này với ảnh mẫu.
 
@@ -106,7 +121,7 @@ Rồi đổi Coolify resource sang kiểu deploy-from-Git (build tự động kh
 ## Nâng cấp GPU (GTX 1650 → RTX 3060/3090)
 Không đổi kiến trúc. Chỉ:
 - đổi `INSIGHTFACE_MODEL` sang pack to hơn nếu muốn (vd `antelopev2`),
-- bật thêm module trong `vision-api` (OSNet body ReID, vehicle detector, OCR biển số) — VRAM lớn hơn cho phép resident hết,
+- ~~OSNet body ReID~~ ✅ đã có (Phase 1). bật thêm vehicle detector / OCR biển số / gait / pose — VRAM lớn hơn cho phép resident hết,
 - tăng `VISION_GPU_CONCURRENCY`.
 
 ## Cấu trúc

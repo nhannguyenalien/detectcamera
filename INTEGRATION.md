@@ -14,7 +14,7 @@ từ backend khách). **Backend khách giữ 100% dữ liệu thật.** vision-a
 |---|---|---|
 | 1 | Chỗ lưu vector embedding (DB) | ✅ |
 | 2 | `GET /internal/tenants` | ✅ |
-| 3 | `GET /internal/tenants/{tid}/product-embeddings` (và/hoặc `/face-embeddings`) | ✅ |
+| 3 | `GET /internal/tenants/{tid}/product-embeddings` (và/hoặc `/face-embeddings`, `/body-embeddings`) | ✅ |
 | 4 | Xác thực `X-Internal-Key` cho các endpoint trên | ✅ |
 | 5 | Luồng enroll: gọi `/v1/products/embed` → lưu → gọi `/admin/reload` | ✅ |
 | 6 | `POST /internal/events` (nhận audit) | tùy chọn (tắt: `VISION_POST_EVENTS=false`) |
@@ -56,6 +56,18 @@ CREATE INDEX ON product_embeddings (tenant_id);
 CREATE INDEX ON product_embeddings (product_id);
 
 -- Face (nếu dùng): persons + face_embeddings vector(512)
+-- Body ReID (nếu dùng): body_embeddings vector(256), FK person_id CHUNG với face
+--   -> fusion /v1/persons/identify mới gộp được face + body của cùng 1 người.
+CREATE TABLE body_embeddings (
+  id         TEXT PRIMARY KEY,
+  person_id  TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+  tenant_id  TEXT NOT NULL,
+  vec        vector(256) NOT NULL,      -- OSNet reid-0277. Đã L2-normalize.
+  image_url  TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX ON body_embeddings (tenant_id);
+CREATE INDEX ON body_embeddings (person_id);
 
 CREATE TABLE events (
   id         BIGSERIAL PRIMARY KEY,
@@ -174,6 +186,15 @@ await fetch(`${VISION_API}/admin/reload?modality=product&tenant_id=${tenantId}`,
 
 ### 4.2 Xoá SKU
 Xoá trong DB (`ON DELETE CASCADE` xoá embeddings) → gọi `/admin/reload` như trên.
+
+### 4.2b Enroll body ReID (song song face — CÙNG person_id)
+```
+1. Crop TOÀN THÂN người ─POST {vision-api}/v1/body/embed─▶ { "embedding": [256 số] }
+2. INSERT body_embeddings (vec = embedding, person_id = <cùng id với face>)
+3. POST {vision-api}/admin/reload?modality=body&tenant_id={tid}
+```
+Backend trả `GET /internal/tenants/{tid}/body-embeddings` shape y hệt face, `dim:256`.
+Không enroll body cũng không sao — `/v1/persons/identify` tự chạy face-only.
 
 ### 4.3 Nhận diện (end-user)
 ```

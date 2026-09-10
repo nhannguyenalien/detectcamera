@@ -132,6 +132,34 @@ Sau enroll/xoá gọi `POST {vision-api}/admin/reload?modality=product&tenant_id
 
 ---
 
+## 4d. Body ReID (modality `body`, crop toàn thân)
+
+Song song face — **cùng shape, cùng `person_id`** (fusion `/v1/persons/identify` gộp face+body
+theo `person_id`). Chỉ khác: **dim 256** (OSNet `person-reidentification-retail-0277`), không bbox.
+vision-api gọi khi `VISION_ENABLE_BODY=true`.
+
+### `GET /internal/tenants/{tid}/body-embeddings`
+```json
+{
+  "tenant_id": "t_acme",
+  "dim": 256,
+  "model": "person-reidentification-retail-0277",
+  "persons": [
+    { "person_id": "p_001", "name": "Nguyen Van A",
+      "embeddings": [ [ /* 256 số, L2-normed */ ], [ /* crop khác cùng người */ ] ] }
+  ]
+}
+```
+- `person_id` **phải trùng** id bên `persons`/face của cùng người.
+- Nhiều crop / 1 người → search lấy max cosine. `embeddings` rỗng / thiếu endpoint → bỏ qua (fail-soft).
+- **404** nếu tenant không tồn tại.
+
+### Enroll (hệ thống của bạn tự làm; vision-api KHÔNG gọi)
+`POST {vision-api}/v1/body/embed` (crop toàn thân) → lưu `vec` vào `body_embeddings`
+(FK `person_id`) → `POST {vision-api}/admin/reload?modality=body&tenant_id={tid}`.
+
+---
+
 ## 5. `POST /internal/events`
 
 vision-api ghi audit mỗi lần `search` (best-effort, fire-and-forget — backend chậm/lỗi
@@ -143,6 +171,7 @@ không được làm hỏng request nhận dạng).
   "payload": { "request_id": "req_…", "n_faces": 2,
                "matches": [ { "person_id": "p_001", "name": "…", "score": 0.71 } ] } }
 ```
+`kind` cũng có thể là `body_search` hoặc `person_identify` (payload chứa `match` + `face_visible`).
 **201** `{ "ok": true, "id": "ev_…" }`
 
 Backend nên gắn thêm: thời gian nhận, IP/nguồn gọi, token id (không log token). Dùng cho audit trail
