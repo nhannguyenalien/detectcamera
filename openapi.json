@@ -1,1 +1,3535 @@
-{"openapi":"3.1.0","info":{"title":"vision-api","description":"API nhận dạng bằng ảnh trên GPU, **multi-tenant**, FAISS in-RAM.\n\n- **face** — InsightFace SCRFD + ArcFace. Nhiều mặt / ảnh.\n- **product** — DINOv2-S visual search. **1 ảnh = 1 sản phẩm**, so khớp với catalog của tenant.\n\n### Xác thực\nMọi `/v1/*` và `/admin/*`:\n\n| Header | Bắt buộc | |\n|---|---|---|\n| `Authorization: Bearer <token>` | ✅ | token 1 tenant, hoặc global `*` |\n| `X-Tenant-ID` | khi token global | chọn tenant |\n| `X-Request-ID` | không | echo lại |\n\n`role=admin` mới gọi `/admin/reload`. Rate limit theo tenant (429).\n\n### Enroll (giống nhau cho cả 2)\n```\nPOST /v1/{faces|products}/embed  (ảnh)  -> embedding\nPOST {backend}/internal/tenants/{tid}/{persons|products}  {name, embeddings:[emb]}\nPOST /admin/reload?modality={face|product}&tenant_id={tid}\nPOST /v1/{faces|products}/search  -> match.{person_id|product_id} + score\n```\n\n### Ảnh đầu vào\n`multipart/form-data`: `file` (upload) hoặc `url` (http/https, chặn IP nội bộ, không follow redirect lạ).\nGiới hạn `VISION_MAX_IMAGE_BYTES` (20MB), `VISION_MAX_IMAGE_PIXELS`.\n\n`GET /metrics` Prometheus · `GET /health` liveness · `GET /ready` readiness.\n","contact":{"name":"vision-stack"},"license":{"name":"internal"},"version":"1.2.0"},"paths":{"/":{"get":{"tags":["meta"],"summary":"Manifest cho client/agent","description":"Đọc trước khi gọi API: endpoint, cách auth, luồng enroll.","operationId":"root__get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/RootManifest"}}}}}}},"/health":{"get":{"tags":["infra"],"summary":"Liveness","operationId":"health_health_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HealthResponse"}}}}}}},"/ready":{"get":{"tags":["infra"],"summary":"Readiness — model + FAISS sẵn sàng","operationId":"ready_ready_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReadyResponse"}}}},"503":{"description":"Đang khởi động","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReadyResponse"}}}}}}},"/gpu":{"get":{"tags":["infra"],"summary":"Provider ONNX Runtime + VRAM","operationId":"gpu_gpu_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/GpuResponse"}}}}}}},"/metrics":{"get":{"tags":["infra"],"summary":"Prometheus metrics (LAN — nên firewall)","operationId":"prometheus_metrics_metrics_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/v1/faces/detect":{"post":{"tags":["faces"],"summary":"Phát hiện khuôn mặt (bbox)","operationId":"faces_detect_v1_faces_detect_post","security":[{"HTTPBearer":[]}],"parameters":[{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_faces_detect_v1_faces_detect_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/DetectResponse"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/v1/faces/embed":{"post":{"tags":["faces"],"summary":"Embedding 512-d / mặt (để enroll)","operationId":"faces_embed_v1_faces_embed_post","security":[{"HTTPBearer":[]}],"parameters":[{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_faces_embed_v1_faces_embed_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/EmbedResponse"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/v1/faces/search":{"post":{"tags":["faces"],"summary":"Nhận dạng mặt → person_id + score","operationId":"faces_search_v1_faces_search_post","security":[{"HTTPBearer":[]}],"parameters":[{"name":"top_k","in":"query","required":false,"schema":{"type":"integer","maximum":50,"minimum":1,"default":5,"title":"Top K"}},{"name":"threshold","in":"query","required":false,"schema":{"type":"number","maximum":1.0,"minimum":0.0,"default":0.4,"title":"Threshold"}},{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_faces_search_v1_faces_search_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/SearchResponse"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/v1/index/stats":{"get":{"tags":["faces"],"summary":"Số person / vector đã index (face)","operationId":"index_stats_v1_index_stats_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/StatsResponse"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/v1/products/embed":{"post":{"tags":["products"],"summary":"1 ảnh → embedding sản phẩm (để enroll)","description":"`embedding` (đã L2-norm) là dữ liệu gửi vào backend khi enroll sản phẩm.","operationId":"products_embed_v1_products_embed_post","security":[{"HTTPBearer":[]}],"parameters":[{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_products_embed_v1_products_embed_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ProductEmbedResponse"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/v1/products/search":{"post":{"tags":["products"],"summary":"1 ảnh → product_id + score","operationId":"products_search_v1_products_search_post","security":[{"HTTPBearer":[]}],"parameters":[{"name":"top_k","in":"query","required":false,"schema":{"type":"integer","maximum":50,"minimum":1,"default":5,"title":"Top K"}},{"name":"threshold","in":"query","required":false,"schema":{"type":"number","maximum":1.0,"minimum":0.0,"description":"Ngưỡng cosine coi là match. Calibrate trên catalog thật.","default":0.55,"title":"Threshold"},"description":"Ngưỡng cosine coi là match. Calibrate trên catalog thật."},{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_products_search_v1_products_search_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ProductSearchResponse"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/v1/products/index/stats":{"get":{"tags":["products"],"summary":"Số product / vector đã index","operationId":"products_index_stats_v1_products_index_stats_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/StatsResponse"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/v1/body/embed":{"post":{"tags":["body"],"summary":"Crop toàn thân → body ReID embedding (để enroll)","operationId":"body_embed_v1_body_embed_post","security":[{"HTTPBearer":[]}],"parameters":[{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_body_embed_v1_body_embed_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/BodyEmbedResponse"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/v1/body/search":{"post":{"tags":["body"],"summary":"Crop toàn thân → person_id + score","operationId":"body_search_v1_body_search_post","security":[{"HTTPBearer":[]}],"parameters":[{"name":"top_k","in":"query","required":false,"schema":{"type":"integer","maximum":50,"minimum":1,"default":5,"title":"Top K"}},{"name":"threshold","in":"query","required":false,"schema":{"type":"number","maximum":1.0,"minimum":0.0,"description":"Ngưỡng cosine. Calibrate trên dữ liệu thật.","default":0.5,"title":"Threshold"},"description":"Ngưỡng cosine. Calibrate trên dữ liệu thật."},{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_body_search_v1_body_search_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/BodySearchResponse"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/v1/body/index/stats":{"get":{"tags":["body"],"summary":"Số person / vector đã index (body)","operationId":"body_index_stats_v1_body_index_stats_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/StatsResponse"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/v1/body/attributes":{"post":{"tags":["body"],"summary":"Ảnh → màu áo / quần (lọc nhanh, KHÔNG phải ID)","operationId":"body_attributes_v1_body_attributes_post","security":[{"HTTPBearer":[]}],"parameters":[{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_body_attributes_v1_body_attributes_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ClothingAttributes"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/v1/persons/identify":{"post":{"tags":["body"],"summary":"Crop 1 người → fusion face + body → person_id + confidence","description":"Fusion nhiều tín hiệu trên cùng 1 crop. Không thấy mặt → chỉ body; thấy mặt rõ → ưu tiên face.\n\nclothing_score = null ở phase 1 (chờ backend lưu attributes gallery).","operationId":"persons_identify_v1_persons_identify_post","security":[{"HTTPBearer":[]}],"parameters":[{"name":"top_k","in":"query","required":false,"schema":{"type":"integer","maximum":50,"minimum":1,"default":5,"title":"Top K"}},{"name":"face_threshold","in":"query","required":false,"schema":{"type":"number","maximum":1.0,"minimum":0.0,"default":0.4,"title":"Face Threshold"}},{"name":"body_threshold","in":"query","required":false,"schema":{"type":"number","maximum":1.0,"minimum":0.0,"default":0.5,"title":"Body Threshold"}},{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_persons_identify_v1_persons_identify_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PersonIdentifyResponse"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/admin/reload":{"post":{"tags":["admin"],"summary":"Rebuild FAISS từ backend","operationId":"admin_reload_admin_reload_post","security":[{"HTTPBearer":[]}],"parameters":[{"name":"modality","in":"query","required":false,"schema":{"type":"string","pattern":"^(face|product|body|all)$","default":"all","title":"Modality"}},{"name":"tenant_id","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Bỏ trống = tất cả tenant","title":"Tenant Id"},"description":"Bỏ trống = tất cả tenant"},{"name":"x-tenant-id","in":"header","required":false,"schema":{"type":"string","description":"Bắt buộc khi token là global '*'.","default":"","title":"X-Tenant-Id"},"description":"Bắt buộc khi token là global '*'."},{"name":"x-request-id","in":"header","required":false,"schema":{"type":"string","description":"Tùy chọn; echo lại trong response.","default":"","title":"X-Request-Id"},"description":"Tùy chọn; echo lại trong response."}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReloadResponse"}}}},"400":{"description":"Ảnh/URL không hợp lệ","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Thiếu / sai token","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Sai tenant hoặc thiếu quyền admin","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Modality bị tắt","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Vượt rate limit","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service chưa `ready`","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}}},"components":{"schemas":{"BodyCandidate":{"properties":{"person_id":{"type":"string","title":"Person Id","examples":["P00125"]},"name":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Name","examples":["Nguyen Van A"]},"score":{"type":"number","title":"Score","description":"Cosine similarity (0..1).","examples":[0.86]}},"type":"object","required":["person_id","score"],"title":"BodyCandidate"},"BodyEmbedResponse":{"properties":{"request_id":{"type":"string","title":"Request Id"},"tenant_id":{"type":"string","title":"Tenant Id"},"model":{"type":"string","title":"Model","examples":["osnet_x1_0"]},"dim":{"type":"integer","title":"Dim","default":512,"examples":[512]},"embedding":{"items":{"type":"number"},"type":"array","title":"Embedding","description":"Vector body ReID đã L2-norm. Enroll cùng person_id với face.","examples":[[0.031,-0.012,0.044,"...(còn lại)"]]},"inference_ms":{"type":"number","title":"Inference Ms"}},"type":"object","required":["request_id","tenant_id","model","embedding","inference_ms"],"title":"BodyEmbedResponse"},"BodyIndexInfo":{"properties":{"persons":{"type":"integer","title":"Persons","examples":[12]},"vectors":{"type":"integer","title":"Vectors","examples":[40]}},"type":"object","required":["persons","vectors"],"title":"BodyIndexInfo"},"BodySearchResponse":{"properties":{"request_id":{"type":"string","title":"Request Id"},"tenant_id":{"type":"string","title":"Tenant Id"},"match":{"anyOf":[{"$ref":"#/components/schemas/BodyCandidate"},{"type":"null"}],"description":"Top-1 nếu score >= threshold."},"candidates":{"items":{"$ref":"#/components/schemas/BodyCandidate"},"type":"array","title":"Candidates"},"threshold":{"type":"number","title":"Threshold","examples":[0.5]},"inference_ms":{"type":"number","title":"Inference Ms"},"index":{"$ref":"#/components/schemas/BodyIndexInfo"}},"type":"object","required":["request_id","tenant_id","candidates","threshold","inference_ms","index"],"title":"BodySearchResponse"},"Body_body_attributes_v1_body_attributes_post":{"properties":{"file":{"anyOf":[{"type":"string","format":"binary"},{"type":"null"}],"title":"File"},"url":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Url","description":"URL ảnh http/https"}},"type":"object","title":"Body_body_attributes_v1_body_attributes_post"},"Body_body_embed_v1_body_embed_post":{"properties":{"file":{"anyOf":[{"type":"string","format":"binary"},{"type":"null"}],"title":"File","description":"Crop 1 người, toàn thân"},"url":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Url","description":"URL ảnh http/https"}},"type":"object","title":"Body_body_embed_v1_body_embed_post"},"Body_body_search_v1_body_search_post":{"properties":{"file":{"anyOf":[{"type":"string","format":"binary"},{"type":"null"}],"title":"File"},"url":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Url","description":"URL ảnh http/https"}},"type":"object","title":"Body_body_search_v1_body_search_post"},"Body_faces_detect_v1_faces_detect_post":{"properties":{"file":{"anyOf":[{"type":"string","format":"binary"},{"type":"null"}],"title":"File"},"url":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Url","description":"URL ảnh http/https"}},"type":"object","title":"Body_faces_detect_v1_faces_detect_post"},"Body_faces_embed_v1_faces_embed_post":{"properties":{"file":{"anyOf":[{"type":"string","format":"binary"},{"type":"null"}],"title":"File"},"url":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Url","description":"URL ảnh http/https"}},"type":"object","title":"Body_faces_embed_v1_faces_embed_post"},"Body_faces_search_v1_faces_search_post":{"properties":{"file":{"anyOf":[{"type":"string","format":"binary"},{"type":"null"}],"title":"File"},"url":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Url","description":"URL ảnh http/https"}},"type":"object","title":"Body_faces_search_v1_faces_search_post"},"Body_persons_identify_v1_persons_identify_post":{"properties":{"file":{"anyOf":[{"type":"string","format":"binary"},{"type":"null"}],"title":"File","description":"Crop 1 người (đã detect person)"},"url":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Url","description":"URL ảnh http/https"}},"type":"object","title":"Body_persons_identify_v1_persons_identify_post"},"Body_products_embed_v1_products_embed_post":{"properties":{"file":{"anyOf":[{"type":"string","format":"binary"},{"type":"null"}],"title":"File","description":"Ảnh 1 sản phẩm, cận cảnh"},"url":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Url","description":"URL ảnh http/https"}},"type":"object","title":"Body_products_embed_v1_products_embed_post"},"Body_products_search_v1_products_search_post":{"properties":{"file":{"anyOf":[{"type":"string","format":"binary"},{"type":"null"}],"title":"File","description":"Ảnh sản phẩm cần nhận diện"},"url":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Url","description":"URL ảnh http/https"}},"type":"object","title":"Body_products_search_v1_products_search_post"},"Candidate":{"properties":{"person_id":{"type":"string","title":"Person Id","examples":["p_73a70bd14145"]},"name":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Name","examples":["Zidane"]},"score":{"type":"number","title":"Score","description":"Cosine similarity với embedding truy vấn (0..1, cao = giống).","examples":[1.0]}},"type":"object","required":["person_id","score"],"title":"Candidate"},"ClothingAttributes":{"properties":{"upper_color":{"type":"string","title":"Upper Color","examples":["red"]},"upper_rgb":{"items":{"type":"integer"},"type":"array","title":"Upper Rgb","examples":[[190,40,35]]},"lower_color":{"type":"string","title":"Lower Color","examples":["black"]},"lower_rgb":{"items":{"type":"integer"},"type":"array","title":"Lower Rgb","examples":[[20,20,22]]}},"type":"object","required":["upper_color","upper_rgb","lower_color","lower_rgb"],"title":"ClothingAttributes"},"DetectResponse":{"properties":{"request_id":{"type":"string","title":"Request Id","examples":["req_f6c383fddaf74d09"]},"tenant_id":{"type":"string","title":"Tenant Id","examples":["t_demo"]},"count":{"type":"integer","title":"Count","description":"Số khuôn mặt tìm thấy.","examples":[2]},"faces":{"items":{"$ref":"#/components/schemas/FaceBox"},"type":"array","title":"Faces"},"inference_ms":{"type":"number","title":"Inference Ms","description":"Thời gian suy luận GPU (ms).","examples":[41.2]}},"type":"object","required":["request_id","tenant_id","count","faces","inference_ms"],"title":"DetectResponse"},"EmbedFace":{"properties":{"bbox_xyxy":{"items":{"type":"number"},"type":"array","title":"Bbox Xyxy","description":"Bounding box [x1, y1, x2, y2] theo pixel ảnh gốc.","examples":[[913.4,96.3,1057.1,276.2]]},"det_score":{"type":"number","title":"Det Score","description":"Độ tin cậy của face detector (0..1).","examples":[0.8714]},"embedding":{"items":{"type":"number"},"type":"array","maxItems":512,"minItems":512,"title":"Embedding","description":"Vector nhận dạng 512 chiều, ĐÃ L2-normalize (norm=1). Dùng làm dữ liệu enroll gửi vào backend.","examples":[[0.0299,0.0189,-0.0228,-0.0827,"...(508 số nữa)"]]}},"type":"object","required":["bbox_xyxy","det_score","embedding"],"title":"EmbedFace"},"EmbedResponse":{"properties":{"request_id":{"type":"string","title":"Request Id"},"tenant_id":{"type":"string","title":"Tenant Id"},"model":{"type":"string","title":"Model","description":"Tên model pack InsightFace.","examples":["buffalo_l"]},"dim":{"type":"integer","title":"Dim","default":512,"examples":[512]},"count":{"type":"integer","title":"Count"},"faces":{"items":{"$ref":"#/components/schemas/EmbedFace"},"type":"array","title":"Faces"},"inference_ms":{"type":"number","title":"Inference Ms"}},"type":"object","required":["request_id","tenant_id","model","count","faces","inference_ms"],"title":"EmbedResponse"},"ErrorResponse":{"properties":{"detail":{"type":"string","title":"Detail","examples":["Token không hợp lệ"]}},"type":"object","required":["detail"],"title":"ErrorResponse"},"FaceBox":{"properties":{"bbox_xyxy":{"items":{"type":"number"},"type":"array","title":"Bbox Xyxy","description":"Bounding box [x1, y1, x2, y2] theo pixel ảnh gốc.","examples":[[913.4,96.3,1057.1,276.2]]},"det_score":{"type":"number","title":"Det Score","description":"Độ tin cậy của face detector (0..1).","examples":[0.8714]}},"type":"object","required":["bbox_xyxy","det_score"],"title":"FaceBox"},"GpuResponse":{"properties":{"provider":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Provider","examples":["CUDAExecutionProvider"]},"onnxruntime_providers":{"items":{"type":"string"},"type":"array","title":"Onnxruntime Providers","examples":[["TensorrtExecutionProvider","CUDAExecutionProvider","CPUExecutionProvider"]]},"name":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Name","examples":["NVIDIA GeForce GTX 1650"]},"vram_total_mb":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Vram Total Mb","examples":[4096]},"vram_used_mb":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Vram Used Mb","examples":[686]},"gpu_util_pct":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Gpu Util Pct","examples":[0]}},"type":"object","required":["onnxruntime_providers"],"title":"GpuResponse"},"HTTPValidationError":{"properties":{"detail":{"items":{"$ref":"#/components/schemas/ValidationError"},"type":"array","title":"Detail"}},"type":"object","title":"HTTPValidationError"},"HealthResponse":{"properties":{"status":{"type":"string","title":"Status","default":"ok","examples":["ok"]},"uptime_s":{"type":"number","title":"Uptime S","examples":[128.4]}},"type":"object","required":["uptime_s"],"title":"HealthResponse"},"PersonIdentifyResponse":{"properties":{"request_id":{"type":"string","title":"Request Id"},"tenant_id":{"type":"string","title":"Tenant Id"},"match":{"anyOf":[{"$ref":"#/components/schemas/PersonMatch"},{"type":"null"}],"description":"Top-1 nếu đạt ngưỡng face HOẶC body."},"candidates":{"items":{"$ref":"#/components/schemas/PersonMatch"},"type":"array","title":"Candidates"},"attributes":{"anyOf":[{"$ref":"#/components/schemas/ClothingAttributes"},{"type":"null"}]},"face_visible":{"type":"boolean","title":"Face Visible"},"inference_ms":{"type":"number","title":"Inference Ms"}},"type":"object","required":["request_id","tenant_id","candidates","face_visible","inference_ms"],"title":"PersonIdentifyResponse"},"PersonMatch":{"properties":{"person_id":{"type":"string","title":"Person Id","examples":["P00125"]},"name":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Name","examples":["Nguyen Van A"]},"confidence":{"type":"number","title":"Confidence","description":"Điểm fusion cuối (0..1).","examples":[0.91]},"face_score":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Face Score","examples":[0.95]},"body_score":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Body Score","examples":[0.86]},"clothing_score":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Clothing Score","description":"Phase 1: null (cần backend lưu attributes gallery).","examples":[null]},"sources":{"items":{"type":"string"},"type":"array","title":"Sources","description":"Tín hiệu đã đóng góp.","examples":[["face","body"]]}},"type":"object","required":["person_id","confidence","sources"],"title":"PersonMatch"},"ProductCandidate":{"properties":{"product_id":{"type":"string","title":"Product Id","examples":["p_9f2c1a"]},"name":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Name","examples":["Coca 330ml lon"]},"score":{"type":"number","title":"Score","description":"Cosine similarity (0..1).","examples":[0.87]}},"type":"object","required":["product_id","score"],"title":"ProductCandidate"},"ProductEmbedResponse":{"properties":{"request_id":{"type":"string","title":"Request Id"},"tenant_id":{"type":"string","title":"Tenant Id"},"model":{"type":"string","title":"Model","examples":["dinov2-small"]},"dim":{"type":"integer","title":"Dim","default":384,"examples":[384]},"embedding":{"items":{"type":"number"},"type":"array","maxItems":384,"minItems":384,"title":"Embedding","description":"Vector 384-d đã L2-norm. Gửi vào backend khi enroll sản phẩm.","examples":[[0.021,-0.044,0.011,"...(381 số nữa)"]]},"inference_ms":{"type":"number","title":"Inference Ms"}},"type":"object","required":["request_id","tenant_id","model","embedding","inference_ms"],"title":"ProductEmbedResponse"},"ProductIndexInfo":{"properties":{"products":{"type":"integer","title":"Products","examples":[40]},"vectors":{"type":"integer","title":"Vectors","examples":[40]}},"type":"object","required":["products","vectors"],"title":"ProductIndexInfo"},"ProductSearchResponse":{"properties":{"request_id":{"type":"string","title":"Request Id"},"tenant_id":{"type":"string","title":"Tenant Id"},"match":{"anyOf":[{"$ref":"#/components/schemas/ProductCandidate"},{"type":"null"}],"description":"Candidate top-1 nếu score >= threshold, ngược lại null."},"candidates":{"items":{"$ref":"#/components/schemas/ProductCandidate"},"type":"array","title":"Candidates"},"threshold":{"type":"number","title":"Threshold","examples":[0.55]},"inference_ms":{"type":"number","title":"Inference Ms"},"index":{"$ref":"#/components/schemas/ProductIndexInfo"}},"type":"object","required":["request_id","tenant_id","candidates","threshold","inference_ms","index"],"title":"ProductSearchResponse"},"ReadyResponse":{"properties":{"ready":{"type":"boolean","title":"Ready","description":"true = model + FAISS sẵn sàng nhận request."},"detail":{"type":"string","title":"Detail","examples":["ready","loading product model","sync embeddings"]},"modalities":{"additionalProperties":true,"type":"object","title":"Modalities","description":"Trạng thái từng modality (face / product): enabled, provider, model, indexed.","examples":[{"face":{"enabled":true,"indexed":{"t_demo":{"persons":12,"vectors":34}},"model":"buffalo_l","provider":"CUDAExecutionProvider"},"product":{"enabled":true,"indexed":{"t_demo":{"persons":40,"vectors":40}},"model":"dinov2-small","provider":"CUDAExecutionProvider"}}]}},"type":"object","required":["ready","detail","modalities"],"title":"ReadyResponse"},"ReloadResponse":{"properties":{"reloaded":{"additionalProperties":true,"type":"object","title":"Reloaded","description":"{modality: [tenant_id, ...]}","examples":[{"face":["t_demo"],"product":["t_demo"]}]},"stats":{"additionalProperties":true,"type":"object","title":"Stats","examples":[{"face":{"t_demo":{"persons":2,"vectors":2}},"product":{"t_demo":{"persons":40,"vectors":40}}}]}},"type":"object","required":["reloaded","stats"],"title":"ReloadResponse"},"RootManifest":{"properties":{"service":{"type":"string","title":"Service"},"version":{"type":"string","title":"Version"},"ready_url":{"type":"string","title":"Ready Url"},"modalities":{"additionalProperties":true,"type":"object","title":"Modalities"},"docs":{"additionalProperties":true,"type":"object","title":"Docs"},"auth":{"additionalProperties":true,"type":"object","title":"Auth"},"endpoints":{"items":{"additionalProperties":true,"type":"object"},"type":"array","title":"Endpoints"},"enroll_flow":{"items":{"type":"string"},"type":"array","title":"Enroll Flow"},"notes":{"items":{"type":"string"},"type":"array","title":"Notes"}},"type":"object","required":["service","version","ready_url","modalities","docs","auth","endpoints","enroll_flow","notes"],"title":"RootManifest","description":"Bản mô tả gọn cho AI agent / client tự khám phá."},"SearchFace":{"properties":{"bbox_xyxy":{"items":{"type":"number"},"type":"array","title":"Bbox Xyxy","description":"Bounding box [x1, y1, x2, y2] theo pixel ảnh gốc.","examples":[[913.4,96.3,1057.1,276.2]]},"det_score":{"type":"number","title":"Det Score","description":"Độ tin cậy của face detector (0..1).","examples":[0.8714]},"match":{"anyOf":[{"$ref":"#/components/schemas/Candidate"},{"type":"null"}],"description":"Candidate top-1 NẾU score >= threshold, ngược lại null (không nhận ra)."},"candidates":{"items":{"$ref":"#/components/schemas/Candidate"},"type":"array","title":"Candidates","description":"Tối đa top_k candidate, giảm dần theo score (đã gộp trùng person)."}},"type":"object","required":["bbox_xyxy","det_score","candidates"],"title":"SearchFace"},"SearchIndexInfo":{"properties":{"persons":{"type":"integer","title":"Persons","examples":[2]},"vectors":{"type":"integer","title":"Vectors","examples":[2]}},"type":"object","required":["persons","vectors"],"title":"SearchIndexInfo"},"SearchResponse":{"properties":{"request_id":{"type":"string","title":"Request Id"},"tenant_id":{"type":"string","title":"Tenant Id"},"count":{"type":"integer","title":"Count"},"faces":{"items":{"$ref":"#/components/schemas/SearchFace"},"type":"array","title":"Faces"},"threshold":{"type":"number","title":"Threshold","examples":[0.4]},"inference_ms":{"type":"number","title":"Inference Ms"},"index":{"$ref":"#/components/schemas/SearchIndexInfo"}},"type":"object","required":["request_id","tenant_id","count","faces","threshold","inference_ms","index"],"title":"SearchResponse"},"StatsResponse":{"properties":{"stats":{"additionalProperties":true,"type":"object","title":"Stats","examples":[{"t_demo":{"persons":2,"vectors":2}}]}},"type":"object","required":["stats"],"title":"StatsResponse"},"ValidationError":{"properties":{"loc":{"items":{"anyOf":[{"type":"string"},{"type":"integer"}]},"type":"array","title":"Location"},"msg":{"type":"string","title":"Message"},"type":{"type":"string","title":"Error Type"}},"type":"object","required":["loc","msg","type"],"title":"ValidationError"}},"securitySchemes":{"HTTPBearer":{"type":"http","description":"API token cấp cho 1 tenant, hoặc token global (role=admin, tenant='*').","scheme":"bearer"}}},"tags":[{"name":"infra","description":"Liveness / readiness / GPU / metrics. Không auth."},{"name":"faces","description":"Detect / embed / search khuôn mặt."},{"name":"products","description":"Embed / search sản phẩm (1 ảnh = 1 sp)."},{"name":"body","description":"Person ReID toàn thân — embed / search / attributes / identify."},{"name":"admin","description":"Quản trị index. Token role=admin."},{"name":"meta","description":"Manifest cho client / AI agent."}]}
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "vision-api",
+    "description": "API nhận dạng bằng ảnh trên GPU, **multi-tenant**, FAISS in-RAM.\n\n- **face** — InsightFace SCRFD + ArcFace. Nhiều mặt / ảnh.\n- **product** — DINOv2-S visual search. **1 ảnh = 1 sản phẩm**, so khớp với catalog của tenant.\n\n### Xác thực\nMọi `/v1/*` và `/admin/*`:\n\n| Header | Bắt buộc | |\n|---|---|---|\n| `Authorization: Bearer <token>` | ✅ | token 1 tenant, hoặc global `*` |\n| `X-Tenant-ID` | khi token global | chọn tenant |\n| `X-Request-ID` | không | echo lại |\n\n`role=admin` mới gọi `/admin/reload`. Rate limit theo tenant (429).\n\n### Enroll (giống nhau cho cả 2)\n```\nPOST /v1/{faces|products}/embed  (ảnh)  -> embedding\nPOST {backend}/internal/tenants/{tid}/{persons|products}  {name, embeddings:[emb]}\nPOST /admin/reload?modality={face|product}&tenant_id={tid}\nPOST /v1/{faces|products}/search  -> match.{person_id|product_id} + score\n```\n\n### Ảnh đầu vào\n`multipart/form-data`: `file` (upload) hoặc `url` (http/https, chặn IP nội bộ, không follow redirect lạ).\nGiới hạn `VISION_MAX_IMAGE_BYTES` (20MB), `VISION_MAX_IMAGE_PIXELS`.\n\n`GET /metrics` Prometheus · `GET /health` liveness · `GET /ready` readiness.\n",
+    "contact": {
+      "name": "vision-stack"
+    },
+    "license": {
+      "name": "internal"
+    },
+    "version": "1.2.0"
+  },
+  "paths": {
+    "/": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "Manifest cho client/agent",
+        "description": "Đọc trước khi gọi API: endpoint, cách auth, luồng enroll.",
+        "operationId": "root__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RootManifest"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "infra"
+        ],
+        "summary": "Liveness",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "infra"
+        ],
+        "summary": "Readiness — model + FAISS sẵn sàng",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Đang khởi động",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gpu": {
+      "get": {
+        "tags": [
+          "infra"
+        ],
+        "summary": "Provider ONNX Runtime + VRAM",
+        "operationId": "gpu_gpu_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GpuResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "infra"
+        ],
+        "summary": "Prometheus metrics (LAN — nên firewall)",
+        "operationId": "prometheus_metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/faces/detect": {
+      "post": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Phát hiện khuôn mặt (bbox)",
+        "operationId": "faces_detect_v1_faces_detect_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_faces_detect_v1_faces_detect_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/faces/embed": {
+      "post": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Embedding 512-d / mặt (để enroll)",
+        "operationId": "faces_embed_v1_faces_embed_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_faces_embed_v1_faces_embed_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/faces/search": {
+      "post": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Nhận dạng mặt → person_id + score",
+        "operationId": "faces_search_v1_faces_search_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "top_k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 5,
+              "title": "Top K"
+            }
+          },
+          {
+            "name": "threshold",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "default": 0.4,
+              "title": "Threshold"
+            }
+          },
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_faces_search_v1_faces_search_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/index/stats": {
+      "get": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Số person / vector đã index (face)",
+        "operationId": "index_stats_v1_index_stats_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/products/embed": {
+      "post": {
+        "tags": [
+          "products"
+        ],
+        "summary": "1 ảnh → embedding sản phẩm (để enroll)",
+        "description": "`embedding` (đã L2-norm) là dữ liệu gửi vào backend khi enroll sản phẩm.",
+        "operationId": "products_embed_v1_products_embed_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_products_embed_v1_products_embed_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductEmbedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/products/search": {
+      "post": {
+        "tags": [
+          "products"
+        ],
+        "summary": "1 ảnh → product_id + score",
+        "operationId": "products_search_v1_products_search_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "top_k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 5,
+              "title": "Top K"
+            }
+          },
+          {
+            "name": "threshold",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "description": "Ngưỡng cosine coi là match. Calibrate trên catalog thật.",
+              "default": 0.55,
+              "title": "Threshold"
+            },
+            "description": "Ngưỡng cosine coi là match. Calibrate trên catalog thật."
+          },
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_products_search_v1_products_search_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductSearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/products/index/stats": {
+      "get": {
+        "tags": [
+          "products"
+        ],
+        "summary": "Số product / vector đã index",
+        "operationId": "products_index_stats_v1_products_index_stats_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/body/embed": {
+      "post": {
+        "tags": [
+          "body"
+        ],
+        "summary": "Crop toàn thân → body ReID embedding (để enroll)",
+        "operationId": "body_embed_v1_body_embed_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_body_embed_v1_body_embed_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BodyEmbedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/body/search": {
+      "post": {
+        "tags": [
+          "body"
+        ],
+        "summary": "Crop toàn thân → person_id + score",
+        "operationId": "body_search_v1_body_search_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "top_k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 5,
+              "title": "Top K"
+            }
+          },
+          {
+            "name": "threshold",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "description": "Ngưỡng cosine. Calibrate trên dữ liệu thật.",
+              "default": 0.5,
+              "title": "Threshold"
+            },
+            "description": "Ngưỡng cosine. Calibrate trên dữ liệu thật."
+          },
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_body_search_v1_body_search_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BodySearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/body/index/stats": {
+      "get": {
+        "tags": [
+          "body"
+        ],
+        "summary": "Số person / vector đã index (body)",
+        "operationId": "body_index_stats_v1_body_index_stats_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/body/attributes": {
+      "post": {
+        "tags": [
+          "body"
+        ],
+        "summary": "Ảnh → màu áo / quần (lọc nhanh, KHÔNG phải ID)",
+        "operationId": "body_attributes_v1_body_attributes_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_body_attributes_v1_body_attributes_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClothingAttributes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/persons/identify": {
+      "post": {
+        "tags": [
+          "body"
+        ],
+        "summary": "Crop 1 người → fusion face + body → person_id + confidence",
+        "description": "Fusion nhiều tín hiệu trên cùng 1 crop. Không thấy mặt → chỉ body; thấy mặt rõ → ưu tiên face.\n\nclothing_score = null ở phase 1 (chờ backend lưu attributes gallery).",
+        "operationId": "persons_identify_v1_persons_identify_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "top_k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 5,
+              "title": "Top K"
+            }
+          },
+          {
+            "name": "face_threshold",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "default": 0.4,
+              "title": "Face Threshold"
+            }
+          },
+          {
+            "name": "body_threshold",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "default": 0.5,
+              "title": "Body Threshold"
+            }
+          },
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_persons_identify_v1_persons_identify_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonIdentifyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/reload": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Rebuild FAISS từ backend",
+        "operationId": "admin_reload_admin_reload_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "modality",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(face|product|body|all)$",
+              "default": "all",
+              "title": "Modality"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Bỏ trống = tất cả tenant",
+              "title": "Tenant Id"
+            },
+            "description": "Bỏ trống = tất cả tenant"
+          },
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Bắt buộc khi token là global '*'.",
+              "default": "",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Bắt buộc khi token là global '*'."
+          },
+          {
+            "name": "x-request-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tùy chọn; echo lại trong response.",
+              "default": "",
+              "title": "X-Request-Id"
+            },
+            "description": "Tùy chọn; echo lại trong response."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReloadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ảnh/URL không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Thiếu / sai token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sai tenant hoặc thiếu quyền admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Modality bị tắt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service chưa `ready`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BodyCandidate": {
+        "properties": {
+          "person_id": {
+            "type": "string",
+            "title": "Person Id",
+            "examples": [
+              "P00125"
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "examples": [
+              "Nguyen Van A"
+            ]
+          },
+          "score": {
+            "type": "number",
+            "title": "Score",
+            "description": "Cosine similarity (0..1).",
+            "examples": [
+              0.86
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "person_id",
+          "score"
+        ],
+        "title": "BodyCandidate"
+      },
+      "BodyEmbedResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "examples": [
+              "osnet_x1_0"
+            ]
+          },
+          "dim": {
+            "type": "integer",
+            "title": "Dim",
+            "default": 512,
+            "examples": [
+              512
+            ]
+          },
+          "embedding": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Embedding",
+            "description": "Vector body ReID đã L2-norm. Enroll cùng person_id với face.",
+            "examples": [
+              [
+                0.031,
+                -0.012,
+                0.044,
+                "...(còn lại)"
+              ]
+            ]
+          },
+          "inference_ms": {
+            "type": "number",
+            "title": "Inference Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "tenant_id",
+          "model",
+          "embedding",
+          "inference_ms"
+        ],
+        "title": "BodyEmbedResponse"
+      },
+      "BodyIndexInfo": {
+        "properties": {
+          "persons": {
+            "type": "integer",
+            "title": "Persons",
+            "examples": [
+              12
+            ]
+          },
+          "vectors": {
+            "type": "integer",
+            "title": "Vectors",
+            "examples": [
+              40
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "persons",
+          "vectors"
+        ],
+        "title": "BodyIndexInfo"
+      },
+      "BodySearchResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "match": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BodyCandidate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Top-1 nếu score >= threshold."
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/BodyCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "threshold": {
+            "type": "number",
+            "title": "Threshold",
+            "examples": [
+              0.5
+            ]
+          },
+          "inference_ms": {
+            "type": "number",
+            "title": "Inference Ms"
+          },
+          "index": {
+            "$ref": "#/components/schemas/BodyIndexInfo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "tenant_id",
+          "candidates",
+          "threshold",
+          "inference_ms",
+          "index"
+        ],
+        "title": "BodySearchResponse"
+      },
+      "Body_body_attributes_v1_body_attributes_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "URL ảnh http/https"
+          }
+        },
+        "type": "object",
+        "title": "Body_body_attributes_v1_body_attributes_post"
+      },
+      "Body_body_embed_v1_body_embed_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File",
+            "description": "Crop 1 người, toàn thân"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "URL ảnh http/https"
+          }
+        },
+        "type": "object",
+        "title": "Body_body_embed_v1_body_embed_post"
+      },
+      "Body_body_search_v1_body_search_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "URL ảnh http/https"
+          }
+        },
+        "type": "object",
+        "title": "Body_body_search_v1_body_search_post"
+      },
+      "Body_faces_detect_v1_faces_detect_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "URL ảnh http/https"
+          }
+        },
+        "type": "object",
+        "title": "Body_faces_detect_v1_faces_detect_post"
+      },
+      "Body_faces_embed_v1_faces_embed_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "URL ảnh http/https"
+          }
+        },
+        "type": "object",
+        "title": "Body_faces_embed_v1_faces_embed_post"
+      },
+      "Body_faces_search_v1_faces_search_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "URL ảnh http/https"
+          }
+        },
+        "type": "object",
+        "title": "Body_faces_search_v1_faces_search_post"
+      },
+      "Body_persons_identify_v1_persons_identify_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File",
+            "description": "Crop 1 người (đã detect person)"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "URL ảnh http/https"
+          }
+        },
+        "type": "object",
+        "title": "Body_persons_identify_v1_persons_identify_post"
+      },
+      "Body_products_embed_v1_products_embed_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File",
+            "description": "Ảnh 1 sản phẩm, cận cảnh"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "URL ảnh http/https"
+          }
+        },
+        "type": "object",
+        "title": "Body_products_embed_v1_products_embed_post"
+      },
+      "Body_products_search_v1_products_search_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File",
+            "description": "Ảnh sản phẩm cần nhận diện"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "URL ảnh http/https"
+          }
+        },
+        "type": "object",
+        "title": "Body_products_search_v1_products_search_post"
+      },
+      "Candidate": {
+        "properties": {
+          "person_id": {
+            "type": "string",
+            "title": "Person Id",
+            "examples": [
+              "p_73a70bd14145"
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "examples": [
+              "Zidane"
+            ]
+          },
+          "score": {
+            "type": "number",
+            "title": "Score",
+            "description": "Cosine similarity với embedding truy vấn (0..1, cao = giống).",
+            "examples": [
+              1.0
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "person_id",
+          "score"
+        ],
+        "title": "Candidate"
+      },
+      "ClothingAttributes": {
+        "properties": {
+          "upper_color": {
+            "type": "string",
+            "title": "Upper Color",
+            "examples": [
+              "red"
+            ]
+          },
+          "upper_rgb": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Upper Rgb",
+            "examples": [
+              [
+                190,
+                40,
+                35
+              ]
+            ]
+          },
+          "lower_color": {
+            "type": "string",
+            "title": "Lower Color",
+            "examples": [
+              "black"
+            ]
+          },
+          "lower_rgb": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Lower Rgb",
+            "examples": [
+              [
+                20,
+                20,
+                22
+              ]
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "upper_color",
+          "upper_rgb",
+          "lower_color",
+          "lower_rgb"
+        ],
+        "title": "ClothingAttributes"
+      },
+      "DetectResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id",
+            "examples": [
+              "req_f6c383fddaf74d09"
+            ]
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id",
+            "examples": [
+              "t_demo"
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count",
+            "description": "Số khuôn mặt tìm thấy.",
+            "examples": [
+              2
+            ]
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/FaceBox"
+            },
+            "type": "array",
+            "title": "Faces"
+          },
+          "inference_ms": {
+            "type": "number",
+            "title": "Inference Ms",
+            "description": "Thời gian suy luận GPU (ms).",
+            "examples": [
+              41.2
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "tenant_id",
+          "count",
+          "faces",
+          "inference_ms"
+        ],
+        "title": "DetectResponse"
+      },
+      "EmbedFace": {
+        "properties": {
+          "bbox_xyxy": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Bbox Xyxy",
+            "description": "Bounding box [x1, y1, x2, y2] theo pixel ảnh gốc.",
+            "examples": [
+              [
+                913.4,
+                96.3,
+                1057.1,
+                276.2
+              ]
+            ]
+          },
+          "det_score": {
+            "type": "number",
+            "title": "Det Score",
+            "description": "Độ tin cậy của face detector (0..1).",
+            "examples": [
+              0.8714
+            ]
+          },
+          "embedding": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 512,
+            "minItems": 512,
+            "title": "Embedding",
+            "description": "Vector nhận dạng 512 chiều, ĐÃ L2-normalize (norm=1). Dùng làm dữ liệu enroll gửi vào backend.",
+            "examples": [
+              [
+                0.0299,
+                0.0189,
+                -0.0228,
+                -0.0827,
+                "...(508 số nữa)"
+              ]
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "bbox_xyxy",
+          "det_score",
+          "embedding"
+        ],
+        "title": "EmbedFace"
+      },
+      "EmbedResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "Tên model pack InsightFace.",
+            "examples": [
+              "buffalo_l"
+            ]
+          },
+          "dim": {
+            "type": "integer",
+            "title": "Dim",
+            "default": 512,
+            "examples": [
+              512
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/EmbedFace"
+            },
+            "type": "array",
+            "title": "Faces"
+          },
+          "inference_ms": {
+            "type": "number",
+            "title": "Inference Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "tenant_id",
+          "model",
+          "count",
+          "faces",
+          "inference_ms"
+        ],
+        "title": "EmbedResponse"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "examples": [
+              "Token không hợp lệ"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorResponse"
+      },
+      "FaceBox": {
+        "properties": {
+          "bbox_xyxy": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Bbox Xyxy",
+            "description": "Bounding box [x1, y1, x2, y2] theo pixel ảnh gốc.",
+            "examples": [
+              [
+                913.4,
+                96.3,
+                1057.1,
+                276.2
+              ]
+            ]
+          },
+          "det_score": {
+            "type": "number",
+            "title": "Det Score",
+            "description": "Độ tin cậy của face detector (0..1).",
+            "examples": [
+              0.8714
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "bbox_xyxy",
+          "det_score"
+        ],
+        "title": "FaceBox"
+      },
+      "GpuResponse": {
+        "properties": {
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider",
+            "examples": [
+              "CUDAExecutionProvider"
+            ]
+          },
+          "onnxruntime_providers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Onnxruntime Providers",
+            "examples": [
+              [
+                "TensorrtExecutionProvider",
+                "CUDAExecutionProvider",
+                "CPUExecutionProvider"
+              ]
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "examples": [
+              "NVIDIA GeForce GTX 1650"
+            ]
+          },
+          "vram_total_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vram Total Mb",
+            "examples": [
+              4096
+            ]
+          },
+          "vram_used_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vram Used Mb",
+            "examples": [
+              686
+            ]
+          },
+          "gpu_util_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Util Pct",
+            "examples": [
+              0
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "onnxruntime_providers"
+        ],
+        "title": "GpuResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "ok",
+            "examples": [
+              "ok"
+            ]
+          },
+          "uptime_s": {
+            "type": "number",
+            "title": "Uptime S",
+            "examples": [
+              128.4
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "uptime_s"
+        ],
+        "title": "HealthResponse"
+      },
+      "PersonIdentifyResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "match": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonMatch"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Top-1 nếu đạt ngưỡng face HOẶC body."
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/PersonMatch"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "attributes": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClothingAttributes"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "face_visible": {
+            "type": "boolean",
+            "title": "Face Visible"
+          },
+          "inference_ms": {
+            "type": "number",
+            "title": "Inference Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "tenant_id",
+          "candidates",
+          "face_visible",
+          "inference_ms"
+        ],
+        "title": "PersonIdentifyResponse"
+      },
+      "PersonMatch": {
+        "properties": {
+          "person_id": {
+            "type": "string",
+            "title": "Person Id",
+            "examples": [
+              "P00125"
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "examples": [
+              "Nguyen Van A"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence",
+            "description": "Điểm fusion cuối (0..1).",
+            "examples": [
+              0.91
+            ]
+          },
+          "face_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Score",
+            "examples": [
+              0.95
+            ]
+          },
+          "body_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body Score",
+            "examples": [
+              0.86
+            ]
+          },
+          "clothing_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clothing Score",
+            "description": "Phase 1: null (cần backend lưu attributes gallery).",
+            "examples": [
+              null
+            ]
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources",
+            "description": "Tín hiệu đã đóng góp.",
+            "examples": [
+              [
+                "face",
+                "body"
+              ]
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "person_id",
+          "confidence",
+          "sources"
+        ],
+        "title": "PersonMatch"
+      },
+      "ProductCandidate": {
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "title": "Product Id",
+            "examples": [
+              "p_9f2c1a"
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "examples": [
+              "Coca 330ml lon"
+            ]
+          },
+          "score": {
+            "type": "number",
+            "title": "Score",
+            "description": "Cosine similarity (0..1).",
+            "examples": [
+              0.87
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "product_id",
+          "score"
+        ],
+        "title": "ProductCandidate"
+      },
+      "ProductEmbedResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "examples": [
+              "dinov2-small"
+            ]
+          },
+          "dim": {
+            "type": "integer",
+            "title": "Dim",
+            "default": 384,
+            "examples": [
+              384
+            ]
+          },
+          "embedding": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 384,
+            "minItems": 384,
+            "title": "Embedding",
+            "description": "Vector 384-d đã L2-norm. Gửi vào backend khi enroll sản phẩm.",
+            "examples": [
+              [
+                0.021,
+                -0.044,
+                0.011,
+                "...(381 số nữa)"
+              ]
+            ]
+          },
+          "inference_ms": {
+            "type": "number",
+            "title": "Inference Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "tenant_id",
+          "model",
+          "embedding",
+          "inference_ms"
+        ],
+        "title": "ProductEmbedResponse"
+      },
+      "ProductIndexInfo": {
+        "properties": {
+          "products": {
+            "type": "integer",
+            "title": "Products",
+            "examples": [
+              40
+            ]
+          },
+          "vectors": {
+            "type": "integer",
+            "title": "Vectors",
+            "examples": [
+              40
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "products",
+          "vectors"
+        ],
+        "title": "ProductIndexInfo"
+      },
+      "ProductSearchResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "match": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProductCandidate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Candidate top-1 nếu score >= threshold, ngược lại null."
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ProductCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "threshold": {
+            "type": "number",
+            "title": "Threshold",
+            "examples": [
+              0.55
+            ]
+          },
+          "inference_ms": {
+            "type": "number",
+            "title": "Inference Ms"
+          },
+          "index": {
+            "$ref": "#/components/schemas/ProductIndexInfo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "tenant_id",
+          "candidates",
+          "threshold",
+          "inference_ms",
+          "index"
+        ],
+        "title": "ProductSearchResponse"
+      },
+      "ReadyResponse": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "title": "Ready",
+            "description": "true = model + FAISS sẵn sàng nhận request."
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "examples": [
+              "ready",
+              "loading product model",
+              "sync embeddings"
+            ]
+          },
+          "modalities": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Modalities",
+            "description": "Trạng thái từng modality (face / product): enabled, provider, model, indexed.",
+            "examples": [
+              {
+                "face": {
+                  "enabled": true,
+                  "indexed": {
+                    "t_demo": {
+                      "persons": 12,
+                      "vectors": 34
+                    }
+                  },
+                  "model": "buffalo_l",
+                  "provider": "CUDAExecutionProvider"
+                },
+                "product": {
+                  "enabled": true,
+                  "indexed": {
+                    "t_demo": {
+                      "persons": 40,
+                      "vectors": 40
+                    }
+                  },
+                  "model": "dinov2-small",
+                  "provider": "CUDAExecutionProvider"
+                }
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready",
+          "detail",
+          "modalities"
+        ],
+        "title": "ReadyResponse"
+      },
+      "ReloadResponse": {
+        "properties": {
+          "reloaded": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Reloaded",
+            "description": "{modality: [tenant_id, ...]}",
+            "examples": [
+              {
+                "face": [
+                  "t_demo"
+                ],
+                "product": [
+                  "t_demo"
+                ]
+              }
+            ]
+          },
+          "stats": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Stats",
+            "examples": [
+              {
+                "face": {
+                  "t_demo": {
+                    "persons": 2,
+                    "vectors": 2
+                  }
+                },
+                "product": {
+                  "t_demo": {
+                    "persons": 40,
+                    "vectors": 40
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "reloaded",
+          "stats"
+        ],
+        "title": "ReloadResponse"
+      },
+      "RootManifest": {
+        "properties": {
+          "service": {
+            "type": "string",
+            "title": "Service"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "ready_url": {
+            "type": "string",
+            "title": "Ready Url"
+          },
+          "modalities": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Modalities"
+          },
+          "docs": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Docs"
+          },
+          "auth": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Auth"
+          },
+          "endpoints": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Endpoints"
+          },
+          "enroll_flow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Enroll Flow"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "service",
+          "version",
+          "ready_url",
+          "modalities",
+          "docs",
+          "auth",
+          "endpoints",
+          "enroll_flow",
+          "notes"
+        ],
+        "title": "RootManifest",
+        "description": "Bản mô tả gọn cho AI agent / client tự khám phá."
+      },
+      "SearchFace": {
+        "properties": {
+          "bbox_xyxy": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Bbox Xyxy",
+            "description": "Bounding box [x1, y1, x2, y2] theo pixel ảnh gốc.",
+            "examples": [
+              [
+                913.4,
+                96.3,
+                1057.1,
+                276.2
+              ]
+            ]
+          },
+          "det_score": {
+            "type": "number",
+            "title": "Det Score",
+            "description": "Độ tin cậy của face detector (0..1).",
+            "examples": [
+              0.8714
+            ]
+          },
+          "match": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Candidate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Candidate top-1 NẾU score >= threshold, ngược lại null (không nhận ra)."
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/Candidate"
+            },
+            "type": "array",
+            "title": "Candidates",
+            "description": "Tối đa top_k candidate, giảm dần theo score (đã gộp trùng person)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "bbox_xyxy",
+          "det_score",
+          "candidates"
+        ],
+        "title": "SearchFace"
+      },
+      "SearchIndexInfo": {
+        "properties": {
+          "persons": {
+            "type": "integer",
+            "title": "Persons",
+            "examples": [
+              2
+            ]
+          },
+          "vectors": {
+            "type": "integer",
+            "title": "Vectors",
+            "examples": [
+              2
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "persons",
+          "vectors"
+        ],
+        "title": "SearchIndexInfo"
+      },
+      "SearchResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/SearchFace"
+            },
+            "type": "array",
+            "title": "Faces"
+          },
+          "threshold": {
+            "type": "number",
+            "title": "Threshold",
+            "examples": [
+              0.4
+            ]
+          },
+          "inference_ms": {
+            "type": "number",
+            "title": "Inference Ms"
+          },
+          "index": {
+            "$ref": "#/components/schemas/SearchIndexInfo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "tenant_id",
+          "count",
+          "faces",
+          "threshold",
+          "inference_ms",
+          "index"
+        ],
+        "title": "SearchResponse"
+      },
+      "StatsResponse": {
+        "properties": {
+          "stats": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Stats",
+            "examples": [
+              {
+                "t_demo": {
+                  "persons": 2,
+                  "vectors": 2
+                }
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "stats"
+        ],
+        "title": "StatsResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "description": "API token cấp cho 1 tenant, hoặc token global (role=admin, tenant='*').",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "infra",
+      "description": "Liveness / readiness / GPU / metrics. Không auth."
+    },
+    {
+      "name": "faces",
+      "description": "Detect / embed / search khuôn mặt."
+    },
+    {
+      "name": "products",
+      "description": "Embed / search sản phẩm (1 ảnh = 1 sp)."
+    },
+    {
+      "name": "body",
+      "description": "Person ReID toàn thân — embed / search / attributes / identify."
+    },
+    {
+      "name": "admin",
+      "description": "Quản trị index. Token role=admin."
+    },
+    {
+      "name": "meta",
+      "description": "Manifest cho client / AI agent."
+    }
+  ]
+}
