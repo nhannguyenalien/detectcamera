@@ -70,6 +70,48 @@ Giới hạn `VISION_MAX_IMAGE_BYTES` (20MB), `VISION_MAX_IMAGE_PIXELS`.
 `GET /metrics` Prometheus · `GET /health` liveness · `GET /ready` readiness.
 """
 
+_LLMS_TXT = """\
+# vision-api - GPU image recognition, multi-tenant
+
+Full machine-readable manifest: GET /
+OpenAPI: GET /openapi.json  |  Swagger: GET /docs  |  ReDoc: GET /redoc
+
+## Auth (moi /v1/* va /admin/*)
+Authorization: Bearer <token>
+X-Tenant-ID: <tenant>       # bat buoc neu token la global "*"
+X-Request-ID: <optional>    # echo lai trong response
+role=admin moi goi duoc /admin/reload. Rate limit theo tenant -> HTTP 429.
+
+## Anh dau vao
+multipart/form-data: field "file" (upload) HOAC "url" (http/https; chan IP noi bo; khong follow redirect la).
+
+## Endpoint
+GET  /                         manifest JSON day du (doc de lay param, threshold, dim)
+GET  /health                   liveness
+GET  /ready                    readiness - poll toi ready=true truoc khi ban traffic
+GET  /gpu                      ORT provider + VRAM
+POST /v1/faces/detect          anh -> [bbox, det_score]
+POST /v1/faces/embed           anh -> face embedding (L2-normalized) de enroll
+POST /v1/faces/search          ?top_k&threshold -> moi mat: person_id + score
+POST /v1/products/embed        1 anh -> product embedding
+POST /v1/products/search       ?top_k&threshold -> product_id + score
+GET  /v1/index/stats           kich thuoc index face
+GET  /v1/products/index/stats  kich thuoc index product
+POST /admin/reload             ?modality=face|product|all&tenant_id=  rebuild FAISS (admin)
+
+## Luong enroll (giong nhau cho face va product)
+1. POST /v1/<faces|products>/embed  (anh)  -> embedding
+2. POST <backend>/internal/tenants/<tid>/<persons|products>  {name, embeddings:[emb]}
+3. POST /admin/reload?modality=<face|product>&tenant_id=<tid>
+4. POST /v1/<faces|products>/search  -> match id + score
+
+## Ghi chu
+- embedding da L2-normalize; score = cosine similarity (0..1).
+- match=null nghia la khong co candidate nao >= threshold.
+- 1 anh product = 1 product.
+"""
+
+
 TAGS = [
     {"name": "infra", "description": "Liveness / readiness / GPU / metrics. Không auth."},
     {"name": "faces", "description": "Detect / embed / search khuôn mặt."},
@@ -147,7 +189,7 @@ app = FastAPI(
     version="1.2.0",
     description=DESCRIPTION,
     openapi_tags=TAGS,
-    contact={"name": "vision-stack", "url": "/docs"},
+    contact={"name": "vision-stack"},
     license_info={"name": "internal"},
     lifespan=lifespan,
 )
@@ -302,6 +344,13 @@ async def root():
             f"product: {config.PRODUCT_MODEL} dim={config.PRODUCT_EMB_DIM}, 1 ảnh = 1 sp.",
         ],
     }
+
+
+@app.get("/llms.txt", tags=["meta"], include_in_schema=False,
+         summary="Huong dan ngan cho LLM / AI agent (text/plain)")
+async def llms_txt():
+    """Ban text gon cho AI agent - doc truoc khi tich hop."""
+    return Response(_LLMS_TXT, media_type="text/plain; charset=utf-8")
 
 
 # ------------------------------- infra ----------------------------------- #
