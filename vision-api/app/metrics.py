@@ -33,6 +33,8 @@ _NORMAL_PATHS = {
     "/", "/health", "/ready", "/gpu", "/metrics", "/docs", "/redoc", "/openapi.json",
     "/v1/faces/detect", "/v1/faces/embed", "/v1/faces/search", "/v1/index/stats",
     "/v1/products/embed", "/v1/products/search", "/v1/products/index/stats",
+    "/v1/body/embed", "/v1/body/search", "/v1/body/index/stats", "/v1/body/attributes",
+    "/v1/persons/identify",
     "/admin/reload",
 }
 

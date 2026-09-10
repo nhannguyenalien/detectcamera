@@ -17,11 +17,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
-from . import config, metrics, net, schemas, tokens
+from . import clothing, config, metrics, net, schemas, tokens
 from .backend import BackendClient
 from .deps import Auth, RateLimiter, auth_ctx, require_tenant
 from .engine import FaceEngine
 from .index import IndexStore
+from .body import BodyEngine
 from .products import ProductEngine
 
 STATE = {"ready": False, "detail": "starting", "started_at": time.time()}
@@ -32,10 +33,14 @@ limiter = RateLimiter(config.RATE_LIMIT_PER_MIN)
 
 face_engine = FaceEngine() if config.ENABLE_FACE else None
 product_engine = ProductEngine() if config.ENABLE_PRODUCTS else None
+body_engine = BodyEngine() if config.ENABLE_BODY else None
 
 face_store = IndexStore(backend, "get_face_embeddings", "persons", "person_id", config.EMB_DIM)
 product_store = IndexStore(
     backend, "get_product_embeddings", "products", "product_id", config.PRODUCT_EMB_DIM
+)
+body_store = IndexStore(
+    backend, "get_body_embeddings", "persons", "person_id", config.BODY_EMB_DIM
 )
 
 DESCRIPTION = """\
@@ -95,9 +100,14 @@ POST /v1/faces/embed           anh -> face embedding (L2-normalized) de enroll
 POST /v1/faces/search          ?top_k&threshold -> moi mat: person_id + score
 POST /v1/products/embed        1 anh -> product embedding
 POST /v1/products/search       ?top_k&threshold -> product_id + score
+POST /v1/body/embed           anh crop toan than -> body ReID embedding
+POST /v1/body/search          ?top_k&threshold -> person_id + score
+POST /v1/body/attributes      anh -> mau ao/quan (loc nhanh, KHONG phai ID)
+POST /v1/persons/identify     anh crop 1 nguoi -> fusion face+body -> person_id + confidence
 GET  /v1/index/stats           kich thuoc index face
 GET  /v1/products/index/stats  kich thuoc index product
-POST /admin/reload             ?modality=face|product|all&tenant_id=  rebuild FAISS (admin)
+GET  /v1/body/index/stats      kich thuoc index body
+POST /admin/reload             ?modality=face|product|body|all&tenant_id=  rebuild FAISS (admin)
 
 ## Luong enroll (giong nhau cho face va product)
 1. POST /v1/<faces|products>/embed  (anh)  -> embedding
@@ -109,6 +119,7 @@ POST /admin/reload             ?modality=face|product|all&tenant_id=  rebuild FA
 - embedding da L2-normalize; score = cosine similarity (0..1).
 - match=null nghia la khong co candidate nao >= threshold.
 - 1 anh product = 1 product.
+- body ReID: chi 1 tin hieu; fusion voi face o /v1/persons/identify. Quan ao khong ben (doi do -> giam).
 """
 
 
@@ -116,6 +127,7 @@ TAGS = [
     {"name": "infra", "description": "Liveness / readiness / GPU / metrics. Không auth."},
     {"name": "faces", "description": "Detect / embed / search khuôn mặt."},
     {"name": "products", "description": "Embed / search sản phẩm (1 ảnh = 1 sp)."},
+    {"name": "body", "description": "Person ReID toàn thân — embed / search / attributes / identify."},
     {"name": "admin", "description": "Quản trị index. Token role=admin."},
     {"name": "meta", "description": "Manifest cho client / AI agent."},
 ]
@@ -143,12 +155,17 @@ async def lifespan(_: FastAPI):
             STATE["detail"] = "loading product model"
             await loop.run_in_executor(None, product_engine.load)
             await loop.run_in_executor(None, product_engine.warmup)
+        if body_engine:
+            STATE["detail"] = "loading body reid model"
+            await loop.run_in_executor(None, body_engine.load)
+            await loop.run_in_executor(None, body_engine.warmup)
 
         if config.PREFETCH_ON_START:
             STATE["detail"] = "sync embeddings"
             for enabled, st, mod in (
                 (config.ENABLE_FACE, face_store, "face"),
                 (config.ENABLE_PRODUCTS, product_store, "product"),
+                (config.ENABLE_BODY, body_store, "body"),
             ):
                 if not enabled:
                     continue
@@ -260,6 +277,20 @@ async def _embed_product(raw: bytes, kind: str):
     return vec, ms
 
 
+async def _embed_body(raw: bytes, kind: str):
+    loop = asyncio.get_event_loop()
+    async with gpu_sem:
+        try:
+            vec, ms = await loop.run_in_executor(None, body_engine.embed, raw)
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"Ảnh không hợp lệ: {e}")
+    if config.METRICS_ENABLED:
+        metrics.INFERENCE.labels(kind).observe(ms / 1000.0)
+    return vec, ms
+
+
 def _guard_ready() -> None:
     if not STATE["ready"]:
         raise HTTPException(503, f"Service chưa sẵn sàng: {STATE['detail']}")
@@ -273,6 +304,11 @@ def _guard_face() -> None:
 def _guard_product() -> None:
     if not config.ENABLE_PRODUCTS or product_engine is None:
         raise HTTPException(404, "modality 'product' đang tắt (VISION_ENABLE_PRODUCTS=false)")
+
+
+def _guard_body() -> None:
+    if not config.ENABLE_BODY or body_engine is None:
+        raise HTTPException(404, "modality 'body' đang tắt (VISION_ENABLE_BODY=false)")
 
 
 async def _rate_check(auth: Auth) -> None:
@@ -316,11 +352,24 @@ async def root():
              "desc": "1 ảnh -> product_id + score"},
             {"method": "GET", "path": "/v1/products/index/stats", "auth": "client|admin"},
         ]
+    if config.ENABLE_BODY:
+        eps += [
+            {"method": "POST", "path": "/v1/body/embed", "auth": "client", "body": "multipart file|url",
+             "desc": "crop toàn thân -> body ReID embedding"},
+            {"method": "POST", "path": "/v1/body/search", "auth": "client", "body": "multipart file|url",
+             "query": {"top_k": config.BODY_TOP_K, "threshold": config.BODY_MATCH_THRESHOLD},
+             "desc": "crop toàn thân -> person_id + score"},
+            {"method": "POST", "path": "/v1/body/attributes", "auth": "client", "body": "multipart file|url",
+             "desc": "màu áo/quần (lọc nhanh, KHÔNG phải ID)"},
+            {"method": "POST", "path": "/v1/persons/identify", "auth": "client", "body": "multipart file|url",
+             "desc": "fusion face+body -> person_id + confidence"},
+            {"method": "GET", "path": "/v1/body/index/stats", "auth": "client|admin"},
+        ]
     return {
         "service": "vision-api",
         "version": app.version,
         "ready_url": "/ready",
-        "modalities": {"face": config.ENABLE_FACE, "product": config.ENABLE_PRODUCTS},
+        "modalities": {"face": config.ENABLE_FACE, "product": config.ENABLE_PRODUCTS, "body": config.ENABLE_BODY},
         "docs": {"swagger": "/docs", "redoc": "/redoc", "openapi": "/openapi.json", "metrics": "/metrics"},
         "auth": {
             "scheme": "Authorization: Bearer <token>",
@@ -342,6 +391,8 @@ async def root():
             "poll /ready tới ready=true trước khi bắn traffic.",
             f"face: {config.INSIGHTFACE_MODEL} dim={config.EMB_DIM}. "
             f"product: {config.PRODUCT_MODEL} dim={config.PRODUCT_EMB_DIM}, 1 ảnh = 1 sp.",
+            "body: 1 tín hiệu ReID toàn thân; fusion với face ở /v1/persons/identify. "
+            "Quần áo mạnh nhưng KHÔNG bền — đổi đồ thì tin cậy giảm.",
         ],
     }
 
@@ -380,6 +431,12 @@ async def ready():
                 "provider": product_engine.provider if product_engine else None,
                 "model": config.PRODUCT_MODEL,
                 "indexed": product_store.stats(),
+            },
+            "body": {
+                "enabled": config.ENABLE_BODY,
+                "provider": body_engine.provider if body_engine else None,
+                "model": config.BODY_MODEL,
+                "indexed": body_store.stats(),
             },
         },
     }
@@ -590,13 +647,187 @@ def _rename_products(stats: dict) -> dict:
     return {t: {"products": s.get("persons", 0), "vectors": s.get("vectors", 0)} for t, s in stats.items()}
 
 
+# ------------------------------- body (person ReID) -------------------- #
+
+@app.post("/v1/body/embed", tags=["body"], response_model=schemas.BodyEmbedResponse,
+          responses=COMMON_ERRORS, summary="Crop toàn thân → body ReID embedding (để enroll)")
+async def body_embed(
+    auth: Auth = Depends(auth_ctx),
+    file: Optional[UploadFile] = File(None, description="Crop 1 người, toàn thân"),
+    url: Optional[str] = Form(None, description="URL ảnh http/https"),
+):
+    _guard_ready(); _guard_body(); require_tenant(auth)
+    await _rate_check(auth)
+    vec, ms = await _embed_body(await _read_image(file, url), "body_embed")
+    if config.METRICS_ENABLED:
+        metrics.OBJECTS_DETECTED.labels(auth.tenant, "body").inc(1)
+    return {
+        "request_id": auth.request_id, "tenant_id": auth.tenant,
+        "model": config.BODY_MODEL, "dim": len(vec),
+        "embedding": [round(float(x), 6) for x in vec.tolist()],
+        "inference_ms": ms,
+    }
+
+
+@app.post("/v1/body/search", tags=["body"], response_model=schemas.BodySearchResponse,
+          responses=COMMON_ERRORS, summary="Crop toàn thân → person_id + score")
+async def body_search(
+    auth: Auth = Depends(auth_ctx),
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None, description="URL ảnh http/https"),
+    top_k: int = Query(config.BODY_TOP_K, ge=1, le=50),
+    threshold: float = Query(config.BODY_MATCH_THRESHOLD, ge=0.0, le=1.0,
+                             description="Ngưỡng cosine. Calibrate trên dữ liệu thật."),
+):
+    _guard_ready(); _guard_body(); require_tenant(auth)
+    await _rate_check(auth)
+    idx = await body_store.ensure(auth.tenant)
+    vec, ms = await _embed_body(await _read_image(file, url), "body_search")
+    cands = idx.search(vec, top_k)
+    match = cands[0] if cands and cands[0]["score"] >= threshold else None
+    if config.METRICS_ENABLED:
+        metrics.OBJECTS_DETECTED.labels(auth.tenant, "body").inc(1)
+        if match:
+            metrics.MATCHES.labels(auth.tenant, "body").inc(1)
+    if config.POST_EVENTS:
+        asyncio.create_task(backend.post_event(auth.tenant, "body_search", {
+            "request_id": auth.request_id, "match": match}))
+    return {
+        "request_id": auth.request_id, "tenant_id": auth.tenant,
+        "match": match, "candidates": cands, "threshold": threshold, "inference_ms": ms,
+        "index": {"persons": idx.n_persons, "vectors": idx.n_vectors},
+    }
+
+
+@app.get("/v1/body/index/stats", tags=["body"], response_model=schemas.StatsResponse,
+         responses=COMMON_ERRORS, summary="Số person / vector đã index (body)")
+async def body_index_stats(auth: Auth = Depends(auth_ctx)):
+    _guard_body()
+    if auth.role == "admin" and not auth.tenant:
+        return {"stats": body_store.stats()}
+    require_tenant(auth)
+    await body_store.ensure(auth.tenant)
+    return {"stats": body_store.stats(auth.tenant)}
+
+
+@app.post("/v1/body/attributes", tags=["body"], response_model=schemas.ClothingAttributes,
+          responses=COMMON_ERRORS, summary="Ảnh → màu áo / quần (lọc nhanh, KHÔNG phải ID)")
+async def body_attributes(
+    auth: Auth = Depends(auth_ctx),
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None, description="URL ảnh http/https"),
+):
+    _guard_ready(); _guard_body(); require_tenant(auth)
+    await _rate_check(auth)
+    raw = await _read_image(file, url)
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, clothing.attributes, raw)
+
+
+@app.post("/v1/persons/identify", tags=["body"], response_model=schemas.PersonIdentifyResponse,
+          responses=COMMON_ERRORS,
+          summary="Crop 1 người → fusion face + body → person_id + confidence")
+async def persons_identify(
+    auth: Auth = Depends(auth_ctx),
+    file: Optional[UploadFile] = File(None, description="Crop 1 người (đã detect person)"),
+    url: Optional[str] = Form(None, description="URL ảnh http/https"),
+    top_k: int = Query(5, ge=1, le=50),
+    face_threshold: float = Query(config.MATCH_THRESHOLD, ge=0.0, le=1.0),
+    body_threshold: float = Query(config.BODY_MATCH_THRESHOLD, ge=0.0, le=1.0),
+):
+    """Fusion nhiều tín hiệu trên cùng 1 crop. Không thấy mặt → chỉ body; thấy mặt rõ → ưu tiên face.
+
+    clothing_score = null ở phase 1 (chờ backend lưu attributes gallery).
+    """
+    _guard_ready(); require_tenant(auth)
+    if not (config.ENABLE_FACE or config.ENABLE_BODY):
+        raise HTTPException(404, "cần bật modality face hoặc body")
+    await _rate_check(auth)
+    raw = await _read_image(file, url)
+    loop = asyncio.get_event_loop()
+
+    agg: dict = {}
+    face_visible = False
+    total_ms = 0.0
+
+    if config.ENABLE_FACE and face_engine is not None:
+        faces, fms = await _analyze_faces(raw, "identify_face")
+        total_ms += fms
+        fidx = await face_store.ensure(auth.tenant)
+        faces = sorted(
+            faces,
+            key=lambda f: (f["bbox_xyxy"][2] - f["bbox_xyxy"][0]) * (f["bbox_xyxy"][3] - f["bbox_xyxy"][1]),
+            reverse=True,
+        )
+        if faces:
+            face_visible = True
+            for c in fidx.search(faces[0]["embedding"], top_k):
+                e = agg.setdefault(c["person_id"], {
+                    "person_id": c["person_id"], "name": c["name"],
+                    "face_score": None, "body_score": None})
+                e["face_score"] = max(e["face_score"] or 0.0, c["score"])
+
+    if config.ENABLE_BODY and body_engine is not None:
+        bvec, bms = await _embed_body(raw, "identify_body")
+        total_ms += bms
+        bidx = await body_store.ensure(auth.tenant)
+        for c in bidx.search(bvec, top_k):
+            e = agg.setdefault(c["person_id"], {
+                "person_id": c["person_id"], "name": c["name"],
+                "face_score": None, "body_score": None})
+            e["body_score"] = max(e["body_score"] or 0.0, c["score"])
+
+    attrs = None
+    if config.ENABLE_BODY:
+        attrs = await loop.run_in_executor(None, clothing.attributes, raw)
+
+    def fuse(e: dict) -> float:
+        f = e["face_score"] or 0.0
+        b = e["body_score"] or 0.0
+        if e["face_score"] is not None and f >= face_threshold:
+            return round(0.65 * f + 0.35 * b, 4)
+        if e["body_score"] is not None:
+            if e["face_score"] is not None:
+                return round(0.25 * f + 0.75 * b, 4)
+            return round(b, 4)
+        return round(f, 4)
+
+    cands = []
+    for e in agg.values():
+        cands.append({
+            **e,
+            "confidence": fuse(e),
+            "clothing_score": None,
+            "sources": [name for name, key in (("face", "face_score"), ("body", "body_score"))
+                        if e[key] is not None],
+        })
+    cands.sort(key=lambda x: -x["confidence"])
+    cands = cands[:top_k]
+
+    best = None
+    if cands:
+        c0 = cands[0]
+        if (c0["face_score"] or 0.0) >= face_threshold or (c0["body_score"] or 0.0) >= body_threshold:
+            best = c0
+
+    if config.POST_EVENTS:
+        asyncio.create_task(backend.post_event(auth.tenant, "person_identify", {
+            "request_id": auth.request_id, "match": best, "face_visible": face_visible}))
+
+    return {
+        "request_id": auth.request_id, "tenant_id": auth.tenant,
+        "match": best, "candidates": cands, "attributes": attrs,
+        "face_visible": face_visible, "inference_ms": round(total_ms, 1),
+    }
+
+
 # ------------------------------- admin --------------------------------- #
 
 @app.post("/admin/reload", tags=["admin"], response_model=schemas.ReloadResponse,
           responses=COMMON_ERRORS, summary="Rebuild FAISS từ backend")
 async def admin_reload(
     auth: Auth = Depends(auth_ctx),
-    modality: str = Query("all", pattern="^(face|product|all)$"),
+    modality: str = Query("all", pattern="^(face|product|body|all)$"),
     tenant_id: Optional[str] = Query(None, description="Bỏ trống = tất cả tenant"),
 ):
     if auth.role != "admin":
@@ -606,6 +837,8 @@ async def admin_reload(
         targets.append((face_store, "face"))
     if modality in ("product", "all") and config.ENABLE_PRODUCTS:
         targets.append((product_store, "product"))
+    if modality in ("body", "all") and config.ENABLE_BODY:
+        targets.append((body_store, "body"))
 
     out: dict = {"reloaded": {}, "stats": {}}
     for st, mod in targets:

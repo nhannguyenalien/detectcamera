@@ -176,3 +176,67 @@ class RootManifest(BaseModel):
     endpoints: list[dict]
     enroll_flow: list[str]
     notes: list[str]
+
+
+# ---- body (person ReID toàn thân) ----
+
+class BodyEmbedResponse(BaseModel):
+    request_id: str
+    tenant_id: str
+    model: str = Field(..., examples=["osnet_x1_0"])
+    dim: int = Field(512, examples=[512])
+    embedding: list[float] = Field(
+        ..., description="Vector body ReID đã L2-norm. Enroll cùng person_id với face.",
+        examples=[[0.031, -0.012, 0.044, "...(còn lại)"]],
+    )
+    inference_ms: float
+
+
+class BodyCandidate(BaseModel):
+    person_id: str = Field(..., examples=["P00125"])
+    name: Optional[str] = Field(None, examples=["Nguyen Van A"])
+    score: float = Field(..., description="Cosine similarity (0..1).", examples=[0.86])
+
+
+class BodyIndexInfo(BaseModel):
+    persons: int = Field(..., examples=[12])
+    vectors: int = Field(..., examples=[40])
+
+
+class BodySearchResponse(BaseModel):
+    request_id: str
+    tenant_id: str
+    match: Optional[BodyCandidate] = Field(None, description="Top-1 nếu score >= threshold.")
+    candidates: list[BodyCandidate]
+    threshold: float = Field(..., examples=[0.5])
+    inference_ms: float
+    index: BodyIndexInfo
+
+
+class ClothingAttributes(BaseModel):
+    upper_color: str = Field(..., examples=["red"])
+    upper_rgb: list[int] = Field(..., examples=[[190, 40, 35]])
+    lower_color: str = Field(..., examples=["black"])
+    lower_rgb: list[int] = Field(..., examples=[[20, 20, 22]])
+
+
+class PersonMatch(BaseModel):
+    person_id: str = Field(..., examples=["P00125"])
+    name: Optional[str] = Field(None, examples=["Nguyen Van A"])
+    confidence: float = Field(..., description="Điểm fusion cuối (0..1).", examples=[0.91])
+    face_score: Optional[float] = Field(None, examples=[0.95])
+    body_score: Optional[float] = Field(None, examples=[0.86])
+    clothing_score: Optional[float] = Field(
+        None, description="Phase 1: null (cần backend lưu attributes gallery).", examples=[None]
+    )
+    sources: list[str] = Field(..., description="Tín hiệu đã đóng góp.", examples=[["face", "body"]])
+
+
+class PersonIdentifyResponse(BaseModel):
+    request_id: str
+    tenant_id: str
+    match: Optional[PersonMatch] = Field(None, description="Top-1 nếu đạt ngưỡng face HOẶC body.")
+    candidates: list[PersonMatch]
+    attributes: Optional[ClothingAttributes] = None
+    face_visible: bool
+    inference_ms: float

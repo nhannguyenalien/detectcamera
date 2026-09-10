@@ -24,6 +24,16 @@ PRODUCT_INPUT_SIZE = int(os.getenv("PRODUCT_INPUT_SIZE", "224"))
 PRODUCT_MATCH_THRESHOLD = float(os.getenv("PRODUCT_MATCH_THRESHOLD", "0.55"))
 PRODUCT_TOP_K = int(os.getenv("PRODUCT_TOP_K", "5"))
 
+# ---- BODY ReID (person re-identification toàn thân) — 1 tín hiệu, fusion ở /v1/persons/identify ----
+ENABLE_BODY = os.getenv("VISION_ENABLE_BODY", "false").lower() == "true"
+BODY_EMB_DIM = int(os.getenv("VISION_BODY_EMB_DIM", "512"))  # engine tự ghi đè theo output ONNX thật
+BODY_MODEL = os.getenv("VISION_BODY_MODEL", "osnet_x1_0")
+BODY_MODEL_PATH = os.getenv("VISION_BODY_MODEL_PATH", "/opt/models/reid/model.onnx")
+BODY_INPUT_H = int(os.getenv("VISION_BODY_INPUT_H", "256"))
+BODY_INPUT_W = int(os.getenv("VISION_BODY_INPUT_W", "128"))
+BODY_MATCH_THRESHOLD = float(os.getenv("VISION_BODY_MATCH_THRESHOLD", "0.5"))
+BODY_TOP_K = int(os.getenv("VISION_BODY_TOP_K", "5"))
+
 BACKEND_URL = os.getenv("VISION_BACKEND_URL", "http://mock-backend:9000")
 BACKEND_INTERNAL_KEY = os.getenv("VISION_BACKEND_INTERNAL_KEY", "dev-internal-key")
 BACKEND_TIMEOUT = float(os.getenv("VISION_BACKEND_TIMEOUT", "20"))

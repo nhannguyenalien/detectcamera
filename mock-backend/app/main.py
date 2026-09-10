@@ -213,6 +213,16 @@ def delete_person(tid: str, pid: str) -> Dict[str, Any]:
 # ----------------------------- products (visual search) ---------------------- #
 
 @app.get(
+    "/internal/tenants/{tid}/body-embeddings",
+    dependencies=[Depends(require_internal)],
+)
+def body_embeddings(tid: str = Path(...)) -> Dict[str, Any]:
+    """Body ReID embeddings — cùng person_id với face. Bảng dùng lại face_embeddings
+    nếu chưa có bảng riêng thì trả rỗng (Phase 1)."""
+    return {"tenant_id": tid, "dim": 512, "persons": []}
+
+
+@app.get(
     "/internal/tenants/{tid}/product-embeddings",
     dependencies=[Depends(require_internal)],
 )
